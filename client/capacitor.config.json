@@ -1,0 +1,20 @@
+{
+  "appId": "com.songguessr.app",
+  "appName": "Song Guessr",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#faf8f5",
+      "androidSplashResourceName": "splash",
+      "showSpinner": false
+    }
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
