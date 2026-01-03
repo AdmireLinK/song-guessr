@@ -93,7 +93,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return 0;
     const submitterName = room.currentRound.submitterName;
     return Array.from(room.players.values()).filter(
-      (p) => p.connected && !p.isSpectator && p.name !== submitterName,
+      (p) =>
+        p.connected &&
+        !p.isSpectator &&
+        p.name !== submitterName &&
+        !p.hasGuessedCorrectly &&
+        p.guessesThisRound < room.settings.maxGuessesPerRound,
     ).length;
   }
 
