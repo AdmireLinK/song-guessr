@@ -48,19 +48,30 @@ export default {
           pencil: "#666666",
           highlight: "#ffeb3b",
         },
+        pastel: {
+          blue: "#a7d7e8",
+          green: "#b9e4c9",
+          pink: "#f1c0e8",
+          yellow: "#fcf6bd",
+          orange: "#ffcfb3",
+          purple: "#cfbaf0",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+        'sketch': '255px 15px 225px 15px / 15px 225px 15px 255px',
       },
       fontFamily: {
-        sketch: ['"Comic Neue"', '"Patrick Hand"', 'cursive', 'sans-serif'],
-        hand: ['"Caveat"', '"Gloria Hallelujah"', 'cursive'],
+        // 将中文字体优先放在字体族前，以便中文字符使用 ZCOOL / Noto Serif 即使在其他字体工具类中也能回退到中文字体
+        sketch: ['"ZCOOL KuaiLe"', '"Noto Serif"', '"Comic Neue"', '"Patrick Hand"', 'cursive', 'sans-serif'],
+        hand: ['"ZCOOL KuaiLe"', '"Noto Serif"', '"Caveat"', '"Gloria Hallelujah"', 'cursive'],
       },
       boxShadow: {
-        sketch: '3px 3px 0px rgba(0, 0, 0, 0.2)',
-        'sketch-lg': '5px 5px 0px rgba(0, 0, 0, 0.2)',
+        sketch: '2px 3px 0px 0px #2d2d2d',
+        'sketch-lg': '4px 5px 0px 0px #2d2d2d',
+        'sketch-sm': '1px 2px 0px 0px #2d2d2d',
       },
       animation: {
         'wiggle': 'wiggle 0.3s ease-in-out infinite',

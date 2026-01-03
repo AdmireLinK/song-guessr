@@ -1,5 +1,8 @@
 import { motion } from 'framer-motion';
 import { Music, Sparkles } from 'lucide-react';
+import { NotebookPage } from './NotebookPage';
+
+export { NotebookPage };
 
 export function SketchLogo({ size = 'lg' }: { size?: 'sm' | 'md' | 'lg' }) {
   const sizes = {
@@ -53,7 +56,7 @@ export function SketchLogo({ size = 'lg' }: { size?: 'sm' | 'md' | 'lg' }) {
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
       >
-        🎵 猜歌游戏 - 和朋友一起猜歌曲！
+        Version 0.0.1
       </motion.p>
     </motion.div>
   );
