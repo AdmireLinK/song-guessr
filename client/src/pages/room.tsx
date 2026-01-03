@@ -400,7 +400,8 @@ export function RoomPage() {
   };
 
   const me = players.find((p) => p.name === playerName);
-  const allReady = players.every((p) => p.isReady);
+  const readyPlayers = players.filter((p) => !p.isSpectator && p.connected !== false);
+  const allReady = readyPlayers.length > 0 && readyPlayers.every((p) => p.isReady);
   const needToSubmitSong = playersNeedingSongs.includes(playerName);
   const amSubmitter = (currentRound?.submitterName || pendingSubmitterName) === playerName;
   const iGuessedCorrectly = myGuesses.some((g) => g.correct);
@@ -620,7 +621,7 @@ export function RoomPage() {
                       🎮
                     </motion.div>
                     <p className="text-xl text-sketch-ink/60 font-hand mb-8">
-                      等待所有玩家准备...
+                      {allReady ? '✅ 全员已准备，房主可开始游戏' : '等待所有玩家准备...'}
                     </p>
                     {isHost ? (
                       <Button
