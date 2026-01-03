@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import './index.css'
 import { HomePage, LobbyPage, RoomPage, AdminPage, AdminLoginPage } from './pages'
 
@@ -11,7 +11,7 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<LobbyPage />} />
-        <Route path="/lobby" element={<LobbyPage />} />
+        <Route path="/lobby" element={<Navigate to="/" replace />} />
         <Route path="/room/:roomId" element={<RoomPage />} />
         <Route path="/home" element={<HomePage />} />
         <Route path="/admin" element={<AdminPage />} />

@@ -821,8 +821,8 @@ export async function getSongDetailInfo(
     return await getQQMusicDetailInfo(songId);
   }
 
-  // 网易云音乐获取详细信息逻辑保持不变
-  // 首先尝试使用不依赖_sign的API获取基本信息
+  // 按需求：网易云歌曲也优先走 QQ 的 detail 获取（QQ 的 detail 更稳定）
+  // 步骤：先拿网易云基础信息（歌名/歌手/专辑/发行时间），再用“歌名 歌手 专辑”去 QQ 搜索拿 qq id，最后用 qq id 获取 detail。
   try {
     const basicResponse = await fetch(
       `https://music.163.com/api/song/detail?id=${songId}&ids=%5B${songId}%5D`,
@@ -846,14 +846,62 @@ export async function getSongDetailInfo(
         const song = basicResult.songs[0];
         const basicInfo: SongDetailInfo = {};
 
+        const title = String(song?.name || '').trim();
+        const artist = Array.isArray(song?.artists)
+          ? song.artists.map((a: any) => a?.name).filter(Boolean).join(',')
+          : Array.isArray(song?.ar)
+            ? song.ar.map((a: any) => a?.name).filter(Boolean).join(',')
+            : String(song?.artist || '').trim();
+        const album = String(song?.album?.name || song?.al?.name || '').trim();
+
         // 从专辑的publishTime中提取发行时间
         if (song.album?.publishTime) {
           basicInfo.date = new Date(song.album.publishTime)
             .toISOString()
             .split('T')[0];
+        } else if (song.al?.publishTime) {
+          basicInfo.date = new Date(song.al.publishTime)
+            .toISOString()
+            .split('T')[0];
         }
 
-        // 然后尝试使用wiki API获取更详细的信息（如语言、标签、BPM）
+        // 用“歌名-歌手-专辑”去 QQ 搜索并获取 QQ detail
+        try {
+          const keyword = [title, artist, album].filter(Boolean).join(' ');
+          if (keyword) {
+            const url = new URL(METING_API_BASE);
+            url.searchParams.append('server', 'qq');
+            url.searchParams.append('type', 'search');
+            url.searchParams.append('id', keyword);
+
+            const qqSearchRes = await fetch(url.toString());
+            if (qqSearchRes.ok) {
+              const qqList = await qqSearchRes.json();
+              const first = Array.isArray(qqList) ? qqList[0] : null;
+              let qqId = '';
+              if (first?.url) {
+                const m = String(first.url).match(/[?&]id=([^&]+)/);
+                qqId = m ? m[1] : '';
+              }
+              if (!qqId) {
+                qqId = String(first?.id || first?.mid || first?.songmid || '');
+              }
+
+              if (qqId) {
+                const qqInfo = await getQQMusicDetailInfo(qqId);
+                return {
+                  ...qqInfo,
+                  // QQ detail 缺失时用网易云 publishTime 兜底
+                  date: qqInfo.date || basicInfo.date,
+                };
+              }
+            }
+          }
+        } catch (qqBridgeErr) {
+          console.error('Error bridging netease -> qq detail:', qqBridgeErr);
+        }
+
+        // QQ 兜底失败后，再尝试使用 wiki API 获取更详细的信息（如语言、标签、BPM）
         try {
           const header = {
             clientSign:

@@ -101,9 +101,10 @@ export interface RoundData {
 }
 
 export interface RoundEndData {
-  song: { title: string; artist: string; pictureUrl?: string };
+  song: { title: string; artist: string; album?: string; pictureUrl?: string };
   correctGuessers: string[];
-  scores: { name: string; score: number; correctGuesses: number; totalGuesses: number }[];
+  scores: { name: string; score: number; correctGuesses: number; totalGuesses: number; delta?: number }[];
+  isFinalRound?: boolean;
 }
 
 export interface GameEndData {
@@ -180,7 +181,7 @@ interface GameState {
 }
 
 const DEFAULT_SETTINGS: RoomSettings = {
-  lyricsLineCount: 3,
+  lyricsLineCount: 5,
   endOnFirstCorrect: false,
   maxGuessesPerRound: 3,
   roundDuration: 60,
@@ -272,12 +273,16 @@ export const useGameStore = create<GameState>()(
       
       leaveRoom: () => set({
         currentPage: 'lobby',
+        error: null,
         currentRoom: null,
         players: [],
         settings: DEFAULT_SETTINGS,
         isHost: false,
         gameStatus: 'idle',
         playersNeedingSongs: [],
+        pendingSubmitterName: null,
+        revealedAnswer: null,
+        spectatorGuesses: [],
         currentRound: null,
         guessDeadline: null,
         myGuesses: [],

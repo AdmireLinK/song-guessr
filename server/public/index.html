@@ -14,41 +14,59 @@
     .paper-bg { background-color: #faf8f5; }
   </style>
   <script>
-    let token = localStorage.getItem('admin_token');
+    let token = null;
     let currentTab = 'dashboard';
     let activityChart;
 
-    if (token) {
-      showAdminPanel();
-      loadDashboard(7);
-    }
+    document.addEventListener('DOMContentLoaded', () => {
+       token = localStorage.getItem('admin_token');
+     
+       if (token) {
+         showAdminPanel();
+         loadDashboard(7);
+       }
+     
+      const loginForm = document.getElementById('login-form');
+       if (loginForm) {
+         loginForm.addEventListener('submit', async (e) => {
+           e.preventDefault();
+           const usernameEl = document.getElementById('username');
+           const passwordEl = document.getElementById('password');
+           const username = usernameEl ? usernameEl.value : '';
+           const password = passwordEl ? passwordEl.value : '';
+           try {
+             const res = await fetch('/api/admin/login', {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ username, password }),
+             });
+             if (!res.ok) throw new Error('登录失败');
+             const data = await res.json();
+             token = data.token;
+             localStorage.setItem('admin_token', token);
+             const adminUserEl = document.getElementById('admin-username');
+             if (adminUserEl) adminUserEl.textContent = data.admin.username;
+             showAdminPanel();
+             loadDashboard(7);
+           } catch (err) {
+             const loginErrorEl = document.getElementById('login-error');
+             if (loginErrorEl) {
+               loginErrorEl.textContent = '用户名或密码错误';
+               loginErrorEl.classList.remove('hidden');
+             }
+           }
+         });
+       }
 
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('username').value;
-      const password = document.getElementById('password').value;
-      try {
-        const res = await fetch('/api/admin/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-        if (!res.ok) throw new Error('登录失败');
-        const data = await res.json();
-        token = data.token;
-        localStorage.setItem('admin_token', token);
-        document.getElementById('admin-username').textContent = data.admin.username;
-        showAdminPanel();
-        loadDashboard(7);
-      } catch (err) {
-        document.getElementById('login-error').textContent = '用户名或密码错误';
-        document.getElementById('login-error').classList.remove('hidden');
-      }
+       // DOM 就绪后再初始化 tab，避免 switchTab 找不到节点
+       switchTab('dashboard');
     });
 
     function showAdminPanel() {
-      document.getElementById('login-page').classList.add('hidden');
-      document.getElementById('admin-panel').classList.remove('hidden');
+       const loginPage = document.getElementById('login-page');
+       const adminPanel = document.getElementById('admin-panel');
+       if (loginPage) loginPage.classList.add('hidden');
+       if (adminPanel) adminPanel.classList.remove('hidden');
     }
 
     function logout() {
@@ -70,7 +88,12 @@
       }
 
       document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
-      document.getElementById(`tab-${tab}`).classList.remove('hidden');
+      const tabEl = document.getElementById(`tab-${tab}`);
+      if (tabEl) {
+        tabEl.classList.remove('hidden');
+      } else {
+        console.warn('[Admin] tab container not found:', `tab-${tab}`);
+      }
 
       if (tab === 'dashboard') loadDashboard(7);
       else if (tab === 'rooms') loadRooms();
@@ -242,7 +265,6 @@
       }
     }
 
-    switchTab('dashboard');
   </script>
 </body>
 </html>

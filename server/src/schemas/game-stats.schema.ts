@@ -3,7 +3,7 @@ import { Document } from 'mongoose';
 
 export type GameStatsDocument = GameStats & Document;
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: true, collection: 'tests' })
 export class GameStats {
   @Prop({ required: true })
   roomId: string;

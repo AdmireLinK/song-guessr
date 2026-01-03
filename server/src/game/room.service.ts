@@ -64,6 +64,7 @@ export class RoomService {
       isReady: true,
       isHost: true,
       isSpectator: false,
+      audioReadyThisRound: false,
       guessesThisRound: 0,
       correctGuessesTotal: 0,
       totalGuessesTotal: 0,
@@ -158,6 +159,7 @@ export class RoomService {
       isReady: false,
       isHost: false,
       isSpectator,
+      audioReadyThisRound: false,
       guessesThisRound: 0,
       correctGuessesTotal: 0,
       totalGuessesTotal: 0,
@@ -314,6 +316,7 @@ export class RoomService {
       p.hasGuessedCorrectly = false;
       p.guessesThisRound = 0;
       p.submittedSong = undefined;
+      p.audioReadyThisRound = false;
     }
 
     return { success: true };
@@ -457,11 +460,16 @@ export class RoomService {
 
     const sliceLines = lyrics.slice(startIndex, startIndex + lineCount);
 
+    // 经验性 buffer：避免播放器 pause/seek 的延迟导致“多播放到下一句”
+    const END_BUFFER_MS = 250;
+    const rawEnd =
+      sliceLines[sliceLines.length - 1].endTime ||
+      sliceLines[sliceLines.length - 1].time + 5000;
+    const endTime = Math.max(sliceLines[0].time, rawEnd - END_BUFFER_MS);
+
     return {
       startTime: sliceLines[0].time,
-      endTime:
-        sliceLines[sliceLines.length - 1].endTime ||
-        sliceLines[sliceLines.length - 1].time + 5000,
+      endTime,
       lines: sliceLines,
     };
   }
@@ -488,6 +496,9 @@ export class RoomService {
       song: chosenSong,
       lyricSlice,
       startTime: Date.now(),
+      startScores: Object.fromEntries(
+        Array.from(room.players.values()).map((p) => [p.name, p.score]),
+      ),
       guesses: [],
       correctGuessers: [],
       isActive: true,
@@ -502,6 +513,7 @@ export class RoomService {
     for (const player of room.players.values()) {
       player.guessesThisRound = 0;
       player.hasGuessedCorrectly = false;
+      player.audioReadyThisRound = false;
     }
 
     return round;
@@ -545,6 +557,10 @@ export class RoomService {
 
     if (player.name === round.submitterName) {
       return { success: false, error: 'SUBMITTER_CANNOT_GUESS' };
+    }
+
+    if (!player.audioReadyThisRound) {
+      return { success: false, error: 'AUDIO_NOT_READY' };
     }
 
     player.guessesThisRound++;
@@ -700,6 +716,10 @@ export class RoomService {
       return { success: false, error: 'SUBMITTER_CANNOT_GUESS' };
     }
 
+    if (!player.audioReadyThisRound) {
+      return { success: false, error: 'AUDIO_NOT_READY' };
+    }
+
     if (player.guessesThisRound >= room.settings.maxGuessesPerRound) {
       return { success: false, error: 'NO_MORE_GUESSES' };
     }
@@ -781,6 +801,9 @@ export class RoomService {
       if (player.isSpectator) continue;
       if (!player.connected) continue;
 
+      // 尚未加载完成音频的玩家不阻塞本轮结束
+      if (!player.audioReadyThisRound) continue;
+
       if (
         !player.hasGuessedCorrectly &&
         player.guessesThisRound < room.settings.maxGuessesPerRound &&
@@ -821,7 +844,24 @@ export class RoomService {
     room.currentRound = null;
     room.status = 'round_end';
 
-    const scores = this.getScores(room);
+    const before = round.startScores || {};
+    const scores = this.getScores(room).map((s) => ({
+      ...s,
+      delta: s.score - (before[s.name] ?? s.score),
+    }));
+
+    // 供 round_end 重连同步
+    room.lastRoundEnd = {
+      song: {
+        title: round.song!.title,
+        artist: round.song!.artist,
+        album: round.song!.album,
+        pictureUrl: round.song!.pictureUrl,
+      },
+      correctGuessers: round.correctGuessers,
+      scores,
+      isFinalRound: room.roundHistory.length >= room.settings.maxRounds,
+    };
 
     return { scores, song: round.song! };
   }
@@ -1057,6 +1097,18 @@ export class RoomService {
         room.hostId = nextHost.id;
         room.hostName = nextHost.name;
       }
+    }
+
+    // 若房间内已无任何在线玩家，则直接解散（即使游戏已开始）
+    const hasAnyConnected = Array.from(room.players.values()).some(
+      (p) => p.connected,
+    );
+    if (!hasAnyConnected) {
+      for (const pid of room.players.keys()) {
+        this.playerRoomMap.delete(pid);
+      }
+      this.rooms.delete(roomId);
+      return { room: undefined, wasHost, dissolved: true };
     }
 
     return { room, wasHost, dissolved: false };

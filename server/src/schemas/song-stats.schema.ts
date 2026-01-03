@@ -3,7 +3,7 @@ import { Document } from 'mongoose';
 
 export type SongStatsDocument = SongStats & Document;
 
-@Schema({ timestamps: true })
+@Schema({ timestamps: false })
 export class SongStats {
   @Prop({ required: true })
   songId: string; // 音乐平台的歌曲ID

@@ -4,6 +4,7 @@ import { useGameStore } from '@/store/game-store';
 class SocketService {
   private socket: Socket | null = null;
   private serverUrl: string;
+  private listenersSetup = false;
 
   constructor() {
     // 开发模式下使用空字符串（通过 vite 代理）
@@ -20,7 +21,18 @@ class SocketService {
   }
 
   connect(): Socket {
-    if (this.socket?.connected) {
+    if (this.socket) {
+      if (!this.listenersSetup) {
+        this.setupEventListeners();
+        this.listenersSetup = true;
+      }
+
+      if (this.socket.connected) {
+        return this.socket;
+      }
+
+      // 复用已有 socket：避免反复 io() 创建新连接导致事件监听重复/房间列表不稳定
+      this.socket.connect();
       return this.socket;
     }
 
@@ -42,6 +54,7 @@ class SocketService {
       : io('/game', socketOptions);
 
     this.setupEventListeners();
+    this.listenersSetup = true;
     return this.socket;
   }
 
@@ -58,6 +71,15 @@ class SocketService {
     this.socket.on('disconnect', (reason) => {
       console.log('Disconnected from game server, reason:', reason);
       store.setConnected(false);
+
+      // 非主动断开：提示并送回大厅
+      if (reason !== 'io client disconnect') {
+        const st = useGameStore.getState();
+        if (st.currentRoom) {
+          store.leaveRoom();
+        }
+        store.setError('与服务器连接断开（服务器可能重启/关闭），已返回大厅');
+      }
     });
 
     this.socket.on('connect_error', (error) => {
@@ -205,16 +227,18 @@ class SocketService {
     this.socket.on('game:roundStart', (data) => {
       store.startRound(data);
 
-      // “每次猜测时长”：仅对可猜玩家启动本次尝试计时
+      // “每次猜测时长”：等音频加载完成后由服务端下发 game:guessTimerStart 再开始
+      store.setGuessDeadline(null);
+    });
+
+    this.socket.on('game:guessTimerStart', ({ roundNumber, deadline }) => {
       const st = useGameStore.getState();
-      const me = st.players.find((p) => p.name === st.playerName);
-      const amSubmitter = st.playerName === data.submitterName;
-      const amSpectator = !!me?.isSpectator || amSubmitter;
-      if (st.gameStatus !== 'playing' || amSpectator) {
-        store.setGuessDeadline(null);
-        return;
-      }
-      store.setGuessDeadline(Date.now() + st.settings.roundDuration * 1000);
+      if (st.gameStatus !== 'playing') return;
+      if (!st.currentRound || st.currentRound.roundNumber !== roundNumber) return;
+      if (typeof deadline !== 'number') return;
+
+      // 仅对当前玩家设置倒计时（服务端也是点对点下发）
+      store.setGuessDeadline(deadline);
     });
 
     this.socket.on('game:guessResult', (result) => {
@@ -271,6 +295,7 @@ class SocketService {
     if (this.socket) {
       this.socket.disconnect();
       this.socket = null;
+      this.listenersSetup = false;
     }
   }
 
@@ -341,6 +366,18 @@ class SocketService {
 
   skipRound() {
     this.socket?.emit('game:skipRound');
+  }
+
+  audioReady(data: { roundNumber: number }) {
+    this.socket?.emit('game:audioReady', data);
+  }
+
+  nextRound() {
+    this.socket?.emit('game:nextRound');
+  }
+
+  finishGame() {
+    this.socket?.emit('game:finishGame');
   }
 
   // 聊天

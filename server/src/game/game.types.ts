@@ -54,6 +54,8 @@ export interface Player {
   isReady: boolean;
   isHost: boolean;
   isSpectator?: boolean;
+  // 本轮音频是否已加载完成（用于“音频加载后再开始每次猜测计时”）
+  audioReadyThisRound: boolean;
   guessesThisRound: number;
   correctGuessesTotal: number;
   totalGuessesTotal: number;
@@ -88,6 +90,8 @@ export interface RoundState {
   lyricSlice: LyricSlice | null;
   startTime: number;
   endTime?: number;
+  // 回合开始时各玩家的分数快照，用于计算结算页 delta
+  startScores?: Record<string, number>;
   guesses: GuessResult[];
   correctGuessers: string[]; // 猜对的玩家名
   isActive: boolean;
@@ -112,6 +116,13 @@ export interface Room {
   status: RoomStatus;
   currentRound: RoundState | null;
   roundHistory: RoundState[];
+  // 供 round_end 重连同步使用
+  lastRoundEnd?: {
+    song: { title: string; artist: string; album?: string; pictureUrl: string };
+    correctGuessers: string[];
+    scores: PlayerScore[];
+    isFinalRound: boolean;
+  };
   songQueue: GameSong[];
   pendingSubmitterName?: string;
   createdAt: Date;
@@ -184,6 +195,11 @@ export interface ServerToClientEvents {
     endTime: number;
     submitterName: string;
   }) => void;
+  // “每次猜测计时”开始：仅对当前玩家下发
+  'game:guessTimerStart': (data: {
+    roundNumber: number;
+    deadline: number;
+  }) => void;
   'game:guessResult': (
     result: GuessResult & { remainingGuesses: number },
   ) => void;
@@ -192,9 +208,10 @@ export interface ServerToClientEvents {
     correct: boolean;
   }) => void;
   'game:roundEnd': (data: {
-    song: { title: string; artist: string; pictureUrl: string };
+    song: { title: string; artist: string; album?: string; pictureUrl: string };
     correctGuessers: string[];
     scores: PlayerScore[];
+    isFinalRound: boolean;
   }) => void;
   'game:gameEnd': (data: {
     finalScores: PlayerScore[];
@@ -253,6 +270,11 @@ export interface ClientToServerEvents {
     server: 'netease' | 'qq';
   }) => void;
   'game:skipRound': () => void;
+  // 客户端音频已可播放（用于延后开始计时）
+  'game:audioReady': (data: { roundNumber: number }) => void;
+  // 结算页：房主手动推进
+  'game:nextRound': () => void;
+  'game:finishGame': () => void;
 
   // 聊天
   'chat:send': (data: { message: string }) => void;
@@ -275,6 +297,8 @@ export interface PlayerScore {
   correctGuesses: number;
   totalGuesses: number;
   isWinner?: boolean;
+  // 本轮结算变化（round_end 使用，可选）
+  delta?: number;
 }
 
 // 计分规则
@@ -289,7 +313,7 @@ export const SCORING = {
 
 // 默认房间设置
 export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
-  lyricsLineCount: 3,
+  lyricsLineCount: 5,
   endOnFirstCorrect: false,
   maxGuessesPerRound: 3,
   roundDuration: 60,

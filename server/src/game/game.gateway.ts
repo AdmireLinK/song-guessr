@@ -65,6 +65,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!player || !player.connected) return;
     if (player.isSpectator) return;
     if (player.name === room.currentRound.submitterName) return;
+    // 音频未加载完成则不开始计时
+    if (!player.audioReadyThisRound) return;
     if (player.hasGuessedCorrectly) {
       this.clearGuessTimer(roomId, playerId);
       return;
@@ -192,7 +194,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // #11：若回合进行中且已无任何在线猜测者，直接结束游戏
       if (room.status === 'playing' && room.currentRound?.isActive) {
         if (this.countConnectedGuessers(room.id) <= 0) {
-          void this.endGame(room.id);
+          this.endCurrentRound(room.id);
         }
       }
     }
@@ -264,10 +266,26 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     if (room.status === 'round_end') {
-      // 等待下一轮选择出题人，客户端会靠 room:updated + 后续 needSubmitter 同步
-      client.emit('game:needSubmitter', {
-        roundNumber: room.roundHistory.length + 1,
-      });
+      const payload =
+        room.lastRoundEnd ||
+        (() => {
+          const last = room.roundHistory[room.roundHistory.length - 1];
+          return {
+            song: {
+              title: last?.song?.title || '',
+              artist: last?.song?.artist || '',
+              album: last?.song?.album || '',
+              pictureUrl: last?.song?.pictureUrl || '',
+            },
+            correctGuessers: last?.correctGuessers || [],
+            scores: this.roomService.getScores(room).map((s) => ({
+              ...s,
+              delta: 0,
+            })),
+            isFinalRound: room.roundHistory.length >= room.settings.maxRounds,
+          };
+        })();
+      client.emit('game:roundEnd', payload);
     }
   }
 
@@ -625,7 +643,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           this.endCurrentRound(room.id);
         } else {
           if (this.countConnectedGuessers(room.id) <= 0) {
-            void this.endGame(room.id);
+            this.endCurrentRound(room.id);
           }
         }
       }
@@ -942,9 +960,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
 
       // 每次猜测时长：为每个可猜玩家启动独立计时器（超时将消耗一次猜测并重置）
-      for (const p of room.players.values()) {
-        this.scheduleGuessTimer(room.id, p.id);
-      }
+      // 计时将延后到客户端音频加载完成后（game:audioReady）再开始
 
       this.logger.log(
         `Round ${started.roundNumber} started in room ${room.id}`,
@@ -1009,6 +1025,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           NO_MORE_GUESSES: '本轮猜测次数已用完',
           SUBMITTER_CANNOT_GUESS: '出题人不能参与猜测',
           SPECTATOR_CANNOT_GUESS: '观战者不能参与猜测',
+          AUDIO_NOT_READY: '音频加载中，请稍候…',
         };
         client.emit('error', {
           code: result.error,
@@ -1168,11 +1185,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const room = this.roomService.getRoom(roomId);
     if (!room) return;
 
-    // 如果达到最大轮数，结束游戏
-    if (room.roundHistory.length >= room.settings.maxRounds) {
-      void this.endGame(roomId);
-      return;
-    }
+    // 达到最大轮数后不再自动结束/自动下一轮，等待房主在结算页操作
+    if (room.roundHistory.length >= room.settings.maxRounds) return;
 
     room.status = 'waiting_submitter';
     room.pendingSubmitterName = undefined;
@@ -1190,29 +1204,26 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const { scores, song } = this.roomService.endRound(room);
 
+    const isFinalRound = room.roundHistory.length >= room.settings.maxRounds;
+
     this.server.to(roomId).emit('game:roundEnd', {
       song: {
         title: song.title,
         artist: song.artist,
+        album: song.album,
         pictureUrl: song.pictureUrl,
       },
       correctGuessers:
         room.roundHistory[room.roundHistory.length - 1].correctGuessers,
       scores,
+      isFinalRound,
     });
-
-    // 检查是否继续游戏
-    if (room.roundHistory.length >= room.settings.maxRounds) {
-      setTimeout(() => {
-        void this.endGame(roomId);
-      }, 3000);
-    } else {
-      // 等待 3 秒展示答案后，回到“选择出题人”阶段
-      setTimeout(() => this.beginNextRoundSelection(roomId), 3000);
-    }
   }
 
   private async endGame(roomId: string) {
+    // 清除所有玩家猜测计时器
+    this.clearAllGuessTimers(roomId);
+
     const room = this.roomService.getRoom(roomId);
     if (!room) return;
 
@@ -1238,6 +1249,76 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }, 5000);
 
     this.logger.log(`Game ended in room ${roomId}, winner: ${winner}`);
+  }
+
+  @SubscribeMessage('game:audioReady')
+  handleAudioReady(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { roundNumber: number },
+  ) {
+    const room = this.roomService.getRoomByPlayerId(client.id);
+    if (!room || room.status !== 'playing' || !room.currentRound?.isActive)
+      return;
+
+    const player = room.players.get(client.id);
+    if (!player || player.isSpectator) return;
+
+    if (typeof data?.roundNumber === 'number') {
+      if (room.currentRound.roundNumber !== data.roundNumber) return;
+    }
+
+    // 出题人不需要计时
+    if (player.name === room.currentRound.submitterName) return;
+
+    player.audioReadyThisRound = true;
+
+    const deadline = Date.now() + room.settings.roundDuration * 1000;
+    client.emit('game:guessTimerStart', {
+      roundNumber: room.currentRound.roundNumber,
+      deadline,
+    });
+
+    this.scheduleGuessTimer(room.id, client.id);
+  }
+
+  @SubscribeMessage('game:nextRound')
+  handleNextRound(@ConnectedSocket() client: Socket) {
+    const room = this.roomService.getRoomByPlayerId(client.id);
+    if (!room) return;
+    const player = room.players.get(client.id);
+    if (!player?.isHost) {
+      client.emit('error', { code: 'NOT_HOST', message: '只有房主可以开始下一轮' });
+      return;
+    }
+    if (room.status !== 'round_end') {
+      client.emit('error', { code: 'INVALID_STATE', message: '当前不在结算阶段' });
+      return;
+    }
+    if (room.roundHistory.length >= room.settings.maxRounds) {
+      client.emit('error', { code: 'FINAL_ROUND', message: '已到最后一轮，请结束游戏' });
+      return;
+    }
+
+    room.lastRoundEnd = undefined;
+    this.beginNextRoundSelection(room.id);
+    this.server.to(room.id).emit('room:updated', this.roomService.toRoomInfo(room));
+  }
+
+  @SubscribeMessage('game:finishGame')
+  handleFinishGame(@ConnectedSocket() client: Socket) {
+    const room = this.roomService.getRoomByPlayerId(client.id);
+    if (!room) return;
+    const player = room.players.get(client.id);
+    if (!player?.isHost) {
+      client.emit('error', { code: 'NOT_HOST', message: '只有房主可以结束游戏' });
+      return;
+    }
+    if (room.status !== 'round_end' && room.status !== 'playing') {
+      client.emit('error', { code: 'INVALID_STATE', message: '当前无法结束游戏' });
+      return;
+    }
+
+    void this.endGame(room.id);
   }
 
   // 管理员功能：强制解散房间

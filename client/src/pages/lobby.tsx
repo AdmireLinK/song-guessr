@@ -40,7 +40,27 @@ export function LobbyPage() {
       socketService.listRooms();
     }, 3000);
 
-    return () => clearInterval(interval);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        socketService.connect();
+        socketService.listRooms();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onOnline = () => {
+      socketService.connect();
+      socketService.listRooms();
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
   }, []);
 
   useEffect(() => {
@@ -121,18 +141,19 @@ export function LobbyPage() {
               placeholder="输入昵称后再加入/创建"
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
+              onBlur={() => {
+                const trimmed = nameInput.trim();
+                if (!trimmed) return;
+                setPlayerName(trimmed);
+                setNameInput(trimmed);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  (e.currentTarget as HTMLInputElement).blur();
+                }
+              }}
               className="w-48 text-sm"
             />
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                const name = ensurePlayerName();
-                if (name) setNameInput(name);
-              }}
-            >
-              保存昵称
-            </Button>
           </div>
         </div>
 

@@ -7,7 +7,6 @@ import {
   X,
   Settings,
   Play,
-  Search,
   Send,
   Music,
   Volume2,
@@ -96,12 +95,15 @@ export function RoomPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [chatText, setChatText] = useState('');
   const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState(0.5);
   const [timeLeft, setTimeLeft] = useState(0);
 
   const [roomNameDraft, setRoomNameDraft] = useState('');
   
   const audioRef = useRef<HTMLAudioElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const lastSearchRef = useRef('');
+  const lastAudioReadyRoundRef = useRef<number | null>(null);
 
   useEffect(() => {
     // 直接访问 /room/:roomId 时：若未加入任何房间，则在本页完成 join/create
@@ -109,6 +111,13 @@ export function RoomPage() {
       socketService.connect();
     }
   }, [currentRoom, roomIdFromUrl]);
+
+  useEffect(() => {
+    // 离开房间 / 被踢 / 断线导致 currentRoom 为空：送回大厅
+    if (!currentRoom) {
+      navigate('/');
+    }
+  }, [currentRoom, navigate]);
 
   const handleJoinOrCreate = () => {
     const name = joinName.trim();
@@ -139,6 +148,7 @@ export function RoomPage() {
       const audio = audioRef.current;
       audio.src = currentRound.audioUrl;
       audio.currentTime = currentRound.lyricSlice.startTime / 1000;
+      audio.volume = volume;
 
       // 只播放连续数句歌词对应的时间段：播放到 endTime 就立即停止
       const endSec = currentRound.lyricSlice.endTime / 1000;
@@ -150,15 +160,45 @@ export function RoomPage() {
       };
       audio.addEventListener('timeupdate', onTimeUpdate);
 
+      const onCanPlay = () => {
+        // 音乐加载完成后，通知服务端“可以开始计时”
+        const st = useGameStore.getState();
+        const meNow = st.players.find((p) => p.name === st.playerName);
+        const amSubmitterNow = st.playerName === currentRound.submitterName;
+        const amSpectatorNow = !!meNow?.isSpectator || amSubmitterNow;
+        if (st.gameStatus !== 'playing') return;
+        if (amSpectatorNow) return;
+        if (lastAudioReadyRoundRef.current === currentRound.roundNumber) return;
+        lastAudioReadyRoundRef.current = currentRound.roundNumber;
+        socketService.audioReady({ roundNumber: currentRound.roundNumber });
+      };
+      audio.addEventListener('canplaythrough', onCanPlay);
+      audio.addEventListener('loadeddata', onCanPlay);
+
       void audio.play().catch(() => {
         // 某些浏览器策略可能阻止自动播放，这里静默处理
       });
 
       return () => {
         audio.removeEventListener('timeupdate', onTimeUpdate);
+        audio.removeEventListener('canplaythrough', onCanPlay);
+        audio.removeEventListener('loadeddata', onCanPlay);
       };
     }
   }, [currentRound]);
+
+  // 音量
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.volume = volume;
+  }, [volume]);
+
+  // 离开 playing / 进入结算或结束时，确保停止播放（尤其是房主）
+  useEffect(() => {
+    if (!audioRef.current) return;
+    if (gameStatus === 'playing') return;
+    audioRef.current.pause();
+  }, [gameStatus]);
 
   // 倒计时
   useEffect(() => {
@@ -188,7 +228,7 @@ export function RoomPage() {
 
   const handleLeaveRoom = () => {
     socketService.leaveRoom();
-    navigate('/lobby');
+    navigate('/');
   };
 
   const handleToggleReady = () => {
@@ -215,12 +255,24 @@ export function RoomPage() {
       console.log('[Search] API response:', data);
       // Backend provides search results with id, name, artist
       setSearchResults(data || []);
+      lastSearchRef.current = searchQuery.trim();
       console.log('[Search] Results count:', (data || []).length);
     } catch (error) {
       console.error('[Search] Error:', error);
     } finally {
       setIsSearching(false);
     }
+  };
+
+  const triggerSearchOnBlur = () => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      lastSearchRef.current = '';
+      return;
+    }
+    if (q === lastSearchRef.current) return;
+    void handleSearchSongs();
   };
 
   const handleSelectSong = (song: SearchSong, mode: 'submit' | 'guess') => {
@@ -232,7 +284,10 @@ export function RoomPage() {
 
     if (mode === 'guess') {
       socketService.guess({
-        songId: song.id,
+        songId:
+          typeof song.id === 'string' || typeof song.id === 'number'
+            ? String(song.id)
+            : '',
         server: 'netease',
         title: song.name,
         artist: song.artist,
@@ -261,15 +316,17 @@ export function RoomPage() {
               placeholder="搜索歌曲名或歌手..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSearchSongs()}
+              onBlur={triggerSearchOnBlur}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+              }}
             />
-            <div className="px-3 py-2 rounded-lg border-2 border-sketch-ink bg-muted/30 font-sketch text-sm text-muted-foreground whitespace-nowrap">
-              网易云
-            </div>
+            {isSearching && (
+              <div className="px-3 py-2">
+                <LoadingSpinner />
+              </div>
+            )}
           </div>
-          <Button onClick={handleSearchSongs} disabled={isSearching} title="搜索">
-            {isSearching ? <LoadingSpinner /> : <Search className="w-4 h-4" />}
-          </Button>
         </div>
 
         {searchResults.length > 0 && (
@@ -345,12 +402,6 @@ export function RoomPage() {
     void audio.play().catch(() => {});
   };
 
-  const handleAbortGame = () => {
-    if (!isHost) return;
-    if (!confirm('确定要中断当前游戏吗？将直接结束。')) return;
-    socketService.abortGame();
-  };
-
   const handleRenameRoom = () => {
     if (!isHost) return;
     const name = roomNameDraft.trim();
@@ -421,7 +472,7 @@ export function RoomPage() {
               {error && (
                 <div className="text-sm text-destructive">⚠️ {error}</div>
               )}
-              <Button variant="ghost" className="w-full" onClick={() => navigate('/lobby')}>
+              <Button variant="ghost" className="w-full" onClick={() => navigate('/')}>
                 返回大厅
               </Button>
             </CardContent>
@@ -443,19 +494,30 @@ export function RoomPage() {
             离开房间
           </Button>
           <div className="flex items-center gap-2 min-w-0">
-            <div className="font-hand text-xl truncate">🎵 {currentRoom?.name}</div>
-            {isHost && (
-              <div className="hidden sm:flex items-center gap-2">
+            {isHost ? (
+              <div className="flex items-center gap-2">
+                <div className="font-hand text-xl shrink-0">🎵</div>
                 <Input
                   value={roomNameDraft}
                   onChange={(e) => setRoomNameDraft(e.target.value)}
                   className="h-8 w-56"
-                  placeholder="修改房间名"
+                  placeholder={currentRoom?.name || '修改房间名'}
+                  onBlur={() => {
+                    const next = roomNameDraft.trim();
+                    const cur = (currentRoom?.name || '').trim();
+                    if (!next || next === cur) {
+                      setRoomNameDraft(currentRoom?.name || '');
+                      return;
+                    }
+                    handleRenameRoom();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+                  }}
                 />
-                <Button size="sm" variant="outline" onClick={handleRenameRoom}>
-                  保存
-                </Button>
               </div>
+            ) : (
+              <div className="font-hand text-xl truncate">🎵 {currentRoom?.name}</div>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -466,16 +528,15 @@ export function RoomPage() {
             >
               {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
             </Button>
-            {gameStatus === 'playing' && currentRound && (
-              <Button variant="outline" size="sm" onClick={handleReplaySnippet} title="重播本段">
-                重播
-              </Button>
-            )}
-            {isHost && gameStatus !== 'idle' && (
-              <Button variant="destructive" size="sm" onClick={handleAbortGame} title="中断进行中的游戏">
-                中断
-              </Button>
-            )}
+            <div className="w-28">
+              <Slider
+                value={[Math.round(volume * 100)]}
+                min={0}
+                max={100}
+                step={1}
+                onValueChange={([v]) => setVolume(Math.max(0, Math.min(1, v / 100)))}
+              />
+            </div>
             {isHost && (
               <Button
                 variant="outline"
@@ -657,12 +718,22 @@ export function RoomPage() {
               <>
                 <Card>
                   <CardHeader>
-                    <div className="flex justify-between items-center">
+                    <div className="flex justify-between items-center gap-2">
                       <CardTitle>🎧 第 {currentRound.roundNumber} 轮</CardTitle>
                       <div className="flex items-center gap-2">
                         <span className="text-sm text-muted-foreground">
                           出题: {currentRound.submitterName}
                         </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleReplaySnippet}
+                          title="重听本段"
+                        >
+                          重听
+                        </Button>
                       </div>
                     </div>
                   </CardHeader>
@@ -680,7 +751,9 @@ export function RoomPage() {
                     </div>
                   ) : (
                     <div className="mb-4 text-sm text-muted-foreground">
-                      {amSpectator ? '观战中：等待其他玩家猜测…' : '等待回合开始…'}
+                      {amSpectator
+                        ? '观战中：等待其他玩家猜测…'
+                        : '音频加载中…加载完成后开始计时'}
                     </div>
                   )}
 
@@ -704,7 +777,7 @@ export function RoomPage() {
                   </div>
 
                   {/* 非旁观者：直接显示搜索框（无需弹窗） */}
-                  {!amSpectator && !iGuessedCorrectly && myGuesses.length < settings.maxGuessesPerRound && (
+                  {!amSpectator && !!guessDeadline && !iGuessedCorrectly && myGuesses.length < settings.maxGuessesPerRound && (
                     <div className="mt-2">
                       {renderSongSearchPanel('guess')}
                     </div>
@@ -796,11 +869,54 @@ export function RoomPage() {
                     </h3>
                     <p className="text-muted-foreground mb-4">
                       {roundEndData.song.artist}
+                      {roundEndData.song.album ? ` · ${roundEndData.song.album}` : ''}
                     </p>
                     <div className="text-sm">
                       <p className="text-green-600">
                         ✅ 猜对: {roundEndData.correctGuessers.join(', ') || '无人猜对'}
                       </p>
+                    </div>
+
+                    <div className="mt-6 text-left">
+                      <div className="text-sm text-muted-foreground mb-2">本轮加/扣分 & 当前总分</div>
+                      <div className="space-y-2">
+                        {roundEndData.scores.map((s) => (
+                          <div
+                            key={`roundscore-${s.name}`}
+                            className="flex items-center justify-between p-2 rounded bg-muted/40"
+                          >
+                            <div className="font-sketch truncate">{s.name}</div>
+                            <div className="flex items-center gap-4">
+                              <div
+                                className={`font-mono ${
+                                  (s.delta ?? 0) > 0
+                                    ? 'text-green-700'
+                                    : (s.delta ?? 0) < 0
+                                      ? 'text-destructive'
+                                      : 'text-muted-foreground'
+                                }`}
+                              >
+                                {(s.delta ?? 0) > 0 ? `+${s.delta}` : `${s.delta ?? 0}`}
+                              </div>
+                              <div className="font-bold">{s.score} 分</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {isHost && (
+                        <div className="mt-4 flex justify-end">
+                          {roundEndData.isFinalRound ? (
+                            <Button onClick={() => socketService.finishGame()}>
+                              结束游戏
+                            </Button>
+                          ) : (
+                            <Button onClick={() => socketService.nextRound()}>
+                              下一轮
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </CardContent>

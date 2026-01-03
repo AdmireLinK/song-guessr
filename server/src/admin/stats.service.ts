@@ -196,37 +196,15 @@ export class StatsService {
   }
 
   // 记录游戏开始
-  async recordGameStart(room: Room): Promise<GameStats> {
+  async recordGameStart(room: Room): Promise<void> {
     await this.incDaily(
       this.todayKey(),
       { games: 1 },
       { players: room.players.size },
     );
 
-    const gameStats = new this.gameStatsModel({
-      roomId: room.id,
-      roomName: room.name,
-      hostName: room.hostName,
-      roundCount: 0,
-      playerCount: room.players.size,
-      // 仍保留游戏级数据（便于排障/基本统计），但不再维护 playerstats/actionlogs
-      players: Array.from(room.players.values()).map((p) => ({
-        name: p.name,
-        score: 0,
-        correctGuesses: 0,
-        totalGuesses: 0,
-        songsSubmitted: 0,
-      })),
-      rounds: [],
-      startTime: new Date(),
-      completed: false,
-      settings: {
-        lyricsLineCount: room.settings.lyricsLineCount,
-        endOnFirstCorrect: room.settings.endOnFirstCorrect,
-        maxGuessesPerRound: room.settings.maxGuessesPerRound,
-      },
-    });
-    return gameStats.save();
+    // 按需求：不再写入 GameStats 明细
+    void room;
   }
 
   // 记录游戏结束
@@ -235,48 +213,7 @@ export class StatsService {
     finalScores: PlayerScore[],
     winner: string,
   ): Promise<void> {
-    const endTime = new Date();
-
-    // 更新游戏统计
-    await this.gameStatsModel.updateOne(
-      { roomId: room.id, completed: false },
-      {
-        $set: {
-          endTime,
-          duration:
-            room.roundHistory.length > 0
-              ? Math.floor(
-                  (endTime.getTime() - room.roundHistory[0].startTime) / 1000,
-                )
-              : 0,
-          roundCount: room.roundHistory.length,
-          completed: true,
-          players: finalScores.map((s) => ({
-            name: s.name,
-            score: s.score,
-            correctGuesses: s.correctGuesses,
-            totalGuesses: s.totalGuesses,
-            songsSubmitted:
-              room.players.get(
-                Array.from(room.players.entries()).find(
-                  ([_, p]) => p.name === s.name,
-                )?.[0] || '',
-              )?.songsSubmitted || 0,
-          })),
-          rounds: room.roundHistory.map((r, i) => ({
-            roundNumber: i + 1,
-            songTitle: r.song?.title || '',
-            songArtist: r.song?.artist || '',
-            submittedBy: r.submitterName,
-            correctGuessers: r.correctGuessers,
-            duration: r.endTime
-              ? Math.floor((r.endTime - r.startTime) / 1000)
-              : 0,
-          })),
-        },
-      },
-    );
-
+    // 按需求：不再写入 GameStats 明细
     void winner;
     void room;
     void finalScores;
