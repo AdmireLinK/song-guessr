@@ -13,6 +13,10 @@ import {
   PlayerStatsSchema,
   AdminUser,
   AdminUserSchema,
+  SongStats,
+  SongStatsSchema,
+  ActionLog,
+  ActionLogSchema,
 } from '../schemas';
 import { GameModule } from '../game/game.module';
 
@@ -23,6 +27,8 @@ import { GameModule } from '../game/game.module';
       { name: GameStats.name, schema: GameStatsSchema },
       { name: PlayerStats.name, schema: PlayerStatsSchema },
       { name: AdminUser.name, schema: AdminUserSchema },
+      { name: SongStats.name, schema: SongStatsSchema },
+      { name: ActionLog.name, schema: ActionLogSchema },
     ]),
     forwardRef(() => GameModule),
   ],

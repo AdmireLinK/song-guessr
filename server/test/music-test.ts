@@ -18,7 +18,9 @@ function formatOutput(data: any): void {
   console.log('\n资源信息:');
   console.log(`  音频URL: ${data.audioUrl}`);
   console.log(`  图片URL: ${data.pictureUrl}`);
-  console.log(`  歌词预览: ${data.lyrics.substring(0, 100)}${data.lyrics.length > 100 ? '...' : ''}`);
+  console.log(
+    `  歌词预览: ${data.lyrics.substring(0, 100)}${data.lyrics.length > 100 ? '...' : ''}`,
+  );
 
   console.log('\n详细信息:');
   if (data.detail.date) {
@@ -40,7 +42,7 @@ function formatOutput(data: any): void {
 
 async function main() {
   const args = process.argv.slice(2);
-  
+
   if (args.length === 0) {
     console.log('用法: npx ts-node test/music-test.ts <歌曲ID>');
     console.log('示例: npx ts-node test/music-test.ts 2122534120');

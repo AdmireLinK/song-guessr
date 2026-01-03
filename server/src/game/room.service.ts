@@ -7,6 +7,7 @@ import {
   RoomSettings,
   DEFAULT_ROOM_SETTINGS,
   GameSong,
+  GuessFeedback,
   RoundState,
   LyricSlice,
   LyricLine,
@@ -140,7 +141,11 @@ export class RoomService {
     return { success: true, room };
   }
 
-  leaveRoom(playerId: string): { room?: Room; wasHost: boolean; dissolved: boolean } {
+  leaveRoom(playerId: string): {
+    room?: Room;
+    wasHost: boolean;
+    dissolved: boolean;
+  } {
     const roomId = this.playerRoomMap.get(playerId);
     if (!roomId) {
       return { wasHost: false, dissolved: false };
@@ -166,7 +171,8 @@ export class RoomService {
 
     // 如果房主离开，转移房主
     if (wasHost) {
-      const newHost = room.players.values().next().value;
+      const iter = room.players.values().next();
+      const newHost = (iter.done ? undefined : iter.value) as Player | undefined;
       if (newHost) {
         newHost.isHost = true;
         newHost.isReady = true;
@@ -178,7 +184,11 @@ export class RoomService {
     return { room, wasHost, dissolved: false };
   }
 
-  updateSettings(roomId: string, playerId: string, settings: Partial<RoomSettings>): boolean {
+  updateSettings(
+    roomId: string,
+    playerId: string,
+    settings: Partial<RoomSettings>,
+  ): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;
 
@@ -189,20 +199,32 @@ export class RoomService {
 
     // 验证设置值
     if (settings.lyricsLineCount !== undefined) {
-      settings.lyricsLineCount = Math.max(1, Math.min(10, settings.lyricsLineCount));
+      settings.lyricsLineCount = Math.max(
+        1,
+        Math.min(10, settings.lyricsLineCount),
+      );
     }
     if (settings.maxGuessesPerRound !== undefined) {
-      settings.maxGuessesPerRound = Math.max(1, Math.min(10, settings.maxGuessesPerRound));
+      settings.maxGuessesPerRound = Math.max(
+        1,
+        Math.min(10, settings.maxGuessesPerRound),
+      );
     }
     if (settings.roundDuration !== undefined) {
-      settings.roundDuration = Math.max(30, Math.min(180, settings.roundDuration));
+      settings.roundDuration = Math.max(
+        30,
+        Math.min(180, settings.roundDuration),
+      );
     }
 
     room.settings = { ...room.settings, ...settings };
     return true;
   }
 
-  setPlayerReady(playerId: string, isReady: boolean): { room?: Room; player?: Player } {
+  setPlayerReady(
+    playerId: string,
+    isReady: boolean,
+  ): { room?: Room; player?: Player } {
     const room = this.getRoomByPlayerId(playerId);
     if (!room) return {};
 
@@ -235,7 +257,10 @@ export class RoomService {
     return { canStart: true };
   }
 
-  startGame(roomId: string, playerId: string): { success: boolean; error?: string } {
+  startGame(
+    roomId: string,
+    playerId: string,
+  ): { success: boolean; error?: string } {
     const room = this.rooms.get(roomId);
     if (!room) return { success: false, error: 'ROOM_NOT_FOUND' };
 
@@ -245,9 +270,10 @@ export class RoomService {
     const { canStart, reason } = this.canStartGame(room);
     if (!canStart) return { success: false, error: reason };
 
-    room.status = 'playing';
+    room.status = 'waiting_submitter';
     room.roundHistory = [];
     room.songQueue = [];
+    room.pendingSubmitterName = undefined;
 
     // 重置所有玩家状态
     for (const p of room.players.values()) {
@@ -262,20 +288,63 @@ export class RoomService {
     return { success: true };
   }
 
-  submitSong(playerId: string, song: GameSong): { success: boolean; error?: string; room?: Room } {
+  chooseSubmitter(
+    roomId: string,
+    hostId: string,
+    submitterName: string,
+  ): { success: boolean; error?: string; room?: Room } {
+    const room = this.rooms.get(roomId);
+    if (!room) return { success: false, error: 'ROOM_NOT_FOUND' };
+
+    const host = room.players.get(hostId);
+    if (!host?.isHost) return { success: false, error: 'NOT_HOST' };
+
+    if (room.status !== 'waiting_submitter' && room.status !== 'round_end') {
+      return { success: false, error: 'INVALID_STATE' };
+    }
+
+    const submitter = this.findPlayerByName(room, submitterName);
+    if (!submitter) return { success: false, error: 'PLAYER_NOT_FOUND' };
+    if (!submitter.connected)
+      return { success: false, error: 'PLAYER_NOT_CONNECTED' };
+
+    room.pendingSubmitterName = submitter.name;
+    room.status = 'waiting_song';
+
+    // 仅用于 UI 标记“已提交”旧逻辑；新主玩法每轮只需出题人提交
+    for (const p of room.players.values()) {
+      p.submittedSong = undefined;
+    }
+
+    return { success: true, room };
+  }
+
+  submitSong(
+    playerId: string,
+    song: GameSong,
+  ): { success: boolean; error?: string; room?: Room } {
     const room = this.getRoomByPlayerId(playerId);
     if (!room) return { success: false, error: 'NOT_IN_ROOM' };
 
-    if (room.status !== 'playing') return { success: false, error: 'GAME_NOT_STARTED' };
+    // 新主玩法：等待出题人提交歌曲
+    if (room.status !== 'waiting_song')
+      return { success: false, error: 'NOT_WAITING_SONG' };
 
     const player = room.players.get(playerId);
     if (!player) return { success: false, error: 'PLAYER_NOT_FOUND' };
+
+    if (
+      !room.pendingSubmitterName ||
+      room.pendingSubmitterName !== player.name
+    ) {
+      return { success: false, error: 'NOT_SUBMITTER' };
+    }
 
     song.submittedBy = player.name;
     player.submittedSong = song;
     player.songsSubmitted++;
 
-    room.songQueue.push(song);
+    // 不再使用 songQueue 驱动回合；由房主选出题人 -> 出题人提交 -> 立即开局
 
     return { success: true, room };
   }
@@ -348,42 +417,50 @@ export class RoomService {
     // 随机选择起始位置（避免选到开头和结尾）
     const minStart = Math.min(2, Math.floor(lyrics.length * 0.1));
     const maxStart = Math.max(minStart, lyrics.length - lineCount - 2);
-    const startIndex = Math.floor(Math.random() * (maxStart - minStart + 1)) + minStart;
+    const startIndex =
+      Math.floor(Math.random() * (maxStart - minStart + 1)) + minStart;
 
     const sliceLines = lyrics.slice(startIndex, startIndex + lineCount);
 
     return {
       startTime: sliceLines[0].time,
-      endTime: sliceLines[sliceLines.length - 1].endTime || sliceLines[sliceLines.length - 1].time + 5000,
+      endTime:
+        sliceLines[sliceLines.length - 1].endTime ||
+        sliceLines[sliceLines.length - 1].time + 5000,
       lines: sliceLines,
     };
   }
 
-  startRound(room: Room): RoundState | null {
-    if (room.songQueue.length === 0) return null;
+  startRound(room: Room, song?: GameSong): RoundState | null {
+    const chosenSong = song ?? room.songQueue.shift();
+    if (!chosenSong) return null;
 
-    const song = room.songQueue.shift()!;
-    const lyrics = this.parseLyrics(song.lyrics as unknown as string);
+    const rawLyrics: unknown = (chosenSong as unknown as { lyrics?: unknown }).lyrics;
+    const lyrics: LyricLine[] = Array.isArray(rawLyrics)
+      ? (rawLyrics as LyricLine[])
+      : this.parseLyrics(typeof rawLyrics === 'string' ? rawLyrics : '');
+
     const lyricSlice = this.sliceLyrics(lyrics, room.settings.lyricsLineCount);
 
     if (!lyricSlice) return null;
 
-    // 转换歌词格式
-    song.lyrics = lyrics;
+    // 标准化歌词格式
+    chosenSong.lyrics = lyrics;
 
     const round: RoundState = {
       roundNumber: room.roundHistory.length + 1,
-      song,
+      song: chosenSong,
       lyricSlice,
       startTime: Date.now(),
       guesses: [],
       correctGuessers: [],
       isActive: true,
-      submitterName: song.submittedBy,
+      submitterName: chosenSong.submittedBy,
     };
 
     room.currentRound = round;
     room.status = 'playing';
+    room.pendingSubmitterName = undefined;
 
     // 重置玩家本轮状态
     for (const player of room.players.values()) {
@@ -396,7 +473,7 @@ export class RoomService {
 
   processGuess(
     playerId: string,
-    guess: string,
+    guessedSong: GameSong,
   ): {
     success: boolean;
     correct?: boolean;
@@ -405,6 +482,9 @@ export class RoomService {
     player?: Player;
     roundEnded?: boolean;
     remainingGuesses?: number;
+    feedback?: GuessFeedback;
+    guessedSong?: GameSong;
+    guessResult?: any;
   } {
     const room = this.getRoomByPlayerId(playerId);
     if (!room) return { success: false, error: 'NOT_IN_ROOM' };
@@ -425,27 +505,87 @@ export class RoomService {
     }
 
     const round = room.currentRound;
-    const song = round.song!;
+    const answerSong = round.song!;
+
+    if (player.name === round.submitterName) {
+      return { success: false, error: 'SUBMITTER_CANNOT_GUESS' };
+    }
 
     player.guessesThisRound++;
     player.totalGuessesTotal++;
 
-    const normalizedGuess = this.normalizeString(guess);
-    const normalizedTitle = this.normalizeString(song.title);
-    const normalizedArtist = this.normalizeString(song.artist);
+    const normalizedGuessTitle = this.normalizeString(guessedSong.title);
+    const normalizedGuessArtist = this.normalizeString(guessedSong.artist);
+    const normalizedAnswerTitle = this.normalizeString(answerSong.title);
+    const normalizedAnswerArtist = this.normalizeString(answerSong.artist);
 
-    // 判断是否猜对（匹配歌曲名或歌手名+歌曲名）
+    // 判断是否猜对（优先 ID 绝对匹配，其次标题/歌手组合匹配）
     const correct =
-      normalizedGuess === normalizedTitle ||
-      normalizedGuess.includes(normalizedTitle) ||
-      (normalizedGuess.includes(normalizedArtist) && normalizedGuess.includes(normalizedTitle));
+      (!!guessedSong.id &&
+        !!answerSong.id &&
+        guessedSong.id === answerSong.id) ||
+      (normalizedGuessTitle === normalizedAnswerTitle &&
+        normalizedGuessArtist === normalizedAnswerArtist) ||
+      (normalizedGuessTitle.includes(normalizedAnswerTitle) &&
+        normalizedGuessArtist.includes(normalizedAnswerArtist));
+
+    const feedback: GuessFeedback = {
+      releaseYear: guessedSong.releaseYear,
+      popularity: guessedSong.popularity,
+    };
+
+    // ↑↓ 的语义：指示“要接近答案应该往哪个方向调整”
+    if (
+      guessedSong.releaseYear !== undefined &&
+      answerSong.releaseYear !== undefined
+    ) {
+      if (guessedSong.releaseYear === answerSong.releaseYear)
+        feedback.releaseYearFeedback = '=';
+      else
+        feedback.releaseYearFeedback =
+          guessedSong.releaseYear > answerSong.releaseYear ? '↓' : '↑';
+    } else {
+      feedback.releaseYearFeedback = '?';
+    }
+
+    if (
+      guessedSong.popularity !== undefined &&
+      answerSong.popularity !== undefined
+    ) {
+      if (guessedSong.popularity === answerSong.popularity)
+        feedback.popularityFeedback = '=';
+      else
+        feedback.popularityFeedback =
+          guessedSong.popularity > answerSong.popularity ? '↓' : '↑';
+    } else {
+      feedback.popularityFeedback = '?';
+    }
+
+    if (guessedSong.language && answerSong.language) {
+      feedback.languageMatch = guessedSong.language === answerSong.language;
+    }
+
+    const guessTags = this.buildMetaTags(guessedSong);
+    const answerTags = this.buildMetaTags(answerSong);
+    const shared = this.intersectTags(guessTags, answerTags);
+    feedback.metaTags = { guess: guessTags, shared };
 
     const guessResult = {
       correct,
       playerName: player.name,
-      guessText: guess,
+      guessText: `${guessedSong.title} - ${guessedSong.artist}`,
       timestamp: Date.now(),
       guessNumber: player.guessesThisRound,
+      feedback,
+      guessedSong: {
+        id: guessedSong.id,
+        title: guessedSong.title,
+        artist: guessedSong.artist,
+        pictureUrl: guessedSong.pictureUrl,
+        releaseYear: guessedSong.releaseYear,
+        popularity: guessedSong.popularity,
+        language: guessedSong.language,
+      },
     };
 
     round.guesses.push(guessResult);
@@ -469,7 +609,8 @@ export class RoomService {
       }
     }
 
-    const remainingGuesses = room.settings.maxGuessesPerRound - player.guessesThisRound;
+    const remainingGuesses =
+      room.settings.maxGuessesPerRound - player.guessesThisRound;
 
     // 检查是否结束回合
     let roundEnded = false;
@@ -479,7 +620,59 @@ export class RoomService {
       roundEnded = true;
     }
 
-    return { success: true, correct, room, player, roundEnded, remainingGuesses };
+    return {
+      success: true,
+      correct,
+      room,
+      player,
+      roundEnded,
+      remainingGuesses,
+      feedback,
+      guessedSong,
+      guessResult,
+    };
+  }
+
+  private buildMetaTags(song: GameSong): string[] {
+    const raw: string[] = [];
+    if (song.artist) {
+      raw.push(...this.splitPeople(song.artist));
+    }
+    if (song.album) {
+      raw.push(String(song.album));
+    }
+    if (Array.isArray(song.tags)) {
+      raw.push(...song.tags);
+    }
+
+    // 去重 + 保序
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of raw) {
+      const s = String(t || '').trim();
+      if (!s) continue;
+      const key = this.normalizeString(s);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(s);
+    }
+    return out.slice(0, 30);
+  }
+
+  private splitPeople(input: string): string[] {
+    return input
+      .split(/[,，/、&]|\s+&\s+/g)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  private intersectTags(a: string[], b: string[]): string[] {
+    const bSet = new Set(b.map((x) => this.normalizeString(x)));
+    const shared: string[] = [];
+    for (const x of a) {
+      if (bSet.has(this.normalizeString(x))) shared.push(x);
+    }
+    return shared;
   }
 
   private allPlayersFinished(room: Room): boolean {
@@ -503,7 +696,9 @@ export class RoomService {
     // 计算出题者得分
     const submitter = this.findPlayerByName(room, round.submitterName);
     if (submitter) {
-      const correctCount = round.correctGuessers.filter((n) => n !== round.submitterName).length;
+      const correctCount = round.correctGuessers.filter(
+        (n) => n !== round.submitterName,
+      ).length;
       const totalPlayers = room.players.size - 1; // 不包括出题者自己
 
       if (correctCount === 0) {
@@ -546,6 +741,7 @@ export class RoomService {
     room.currentRound = null;
     room.roundHistory = [];
     room.songQueue = [];
+    room.pendingSubmitterName = undefined;
 
     for (const player of room.players.values()) {
       player.isReady = player.isHost;
@@ -578,7 +774,11 @@ export class RoomService {
     return scores.sort((a, b) => b.score - a.score);
   }
 
-  kickPlayer(roomId: string, hostId: string, targetName: string): { success: boolean; targetId?: string } {
+  kickPlayer(
+    roomId: string,
+    hostId: string,
+    targetName: string,
+  ): { success: boolean; targetId?: string } {
     const room = this.rooms.get(roomId);
     if (!room) return { success: false };
 
@@ -601,10 +801,65 @@ export class RoomService {
     return { success: true, targetId };
   }
 
+  transferHost(
+    roomId: string,
+    requesterId: string,
+    targetName: string,
+    force = false,
+  ): { success: boolean; newHost?: string } {
+    const room = this.rooms.get(roomId);
+    if (!room) return { success: false };
+
+    if (!force) {
+      const requester = room.players.get(requesterId);
+      if (!requester?.isHost) return { success: false };
+    }
+
+    const targetEntry = Array.from(room.players.entries()).find(
+      ([, p]) => p.name === targetName,
+    );
+    if (!targetEntry) return { success: false };
+    const [targetId, target] = targetEntry;
+
+    // 清除现有房主标记
+    for (const player of room.players.values()) {
+      player.isHost = false;
+    }
+
+    target.isHost = true;
+    target.isReady = true;
+    room.hostId = targetId;
+    room.hostName = target.name;
+
+    return { success: true, newHost: target.name };
+  }
+
+  prioritizeSubmitter(
+    roomId: string,
+    requesterId: string,
+    targetName: string,
+    force = false,
+  ): { success: boolean } {
+    const room = this.rooms.get(roomId);
+    if (!room) return { success: false };
+
+    if (!force) {
+      const requester = room.players.get(requesterId);
+      if (!requester?.isHost) return { success: false };
+    }
+
+    const idx = room.songQueue.findIndex((s) => s.submittedBy === targetName);
+    if (idx <= 0) return { success: idx === 0 }; // already first or not found
+
+    const [song] = room.songQueue.splice(idx, 1);
+    room.songQueue.unshift(song);
+    return { success: true };
+  }
+
   private normalizeString(str: string): string {
     return str
       .toLowerCase()
-      .replace(/[\s\-_\.。，,！!？?]/g, '')
+      .replace(/[\s\-_.。，,！!？?]/g, '')
       .replace(/[（(][^）)]*[）)]/g, ''); // 移除括号内容
   }
 
@@ -672,7 +927,11 @@ export class RoomService {
     return playerIds;
   }
 
-  handleDisconnect(playerId: string): { room?: Room; wasHost: boolean; dissolved: boolean } {
+  handleDisconnect(playerId: string): {
+    room?: Room;
+    wasHost: boolean;
+    dissolved: boolean;
+  } {
     return this.leaveRoom(playerId);
   }
 }

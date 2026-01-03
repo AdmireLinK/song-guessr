@@ -1,36 +1,49 @@
 import 'dotenv/config';
-import { createHash, createHmac, createCipheriv, createDecipheriv } from 'crypto';
+import {
+  createHash,
+  createHmac,
+  createCipheriv,
+  createDecipheriv,
+} from 'crypto';
 
-const METING_API_BASE = process.env.METING_API_BASE || 'https://meting.baka.website/api';
+const METING_API_BASE =
+  process.env.METING_API_BASE || 'https://meting.baka.website/api';
 const METING_TOKEN = process.env.METING_TOKEN || 'token';
 
-const NETEASE_LIKE_API = 'https://interfacepc.music.163.com/eapi/song/red/count';
-const NETEASE_DETAIL_API = 'https://interfacepc.music.163.com/eapi/music/wiki/home/song/desktop/get';
+const NETEASE_LIKE_API =
+  'https://interfacepc.music.163.com/eapi/song/red/count';
+const NETEASE_DETAIL_API =
+  'https://interfacepc.music.163.com/eapi/music/wiki/home/song/desktop/get';
 const NETEASE_EAPI_KEY = Buffer.from('e82ckenh8dichen8', 'utf8');
 
 // QQ音乐API相关配置
 const QQ_MUSIC_BASE_URL = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
-const QQ_MUSIC_SONG_DETAIL_URL = 'https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg';
-const QQ_MUSIC_LRC_URL = 'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg';
+const QQ_MUSIC_SONG_DETAIL_URL =
+  'https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg';
+const QQ_MUSIC_LRC_URL =
+  'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg';
 
 function generateQQMusicSign(data: any): string {
-  const PART_1_INDEXES = [23, 14, 6, 36, 16, 40, 7, 19].filter(x => x < 40);
+  const PART_1_INDEXES = [23, 14, 6, 36, 16, 40, 7, 19].filter((x) => x < 40);
   const PART_2_INDEXES = [16, 1, 32, 12, 19, 27, 8, 5];
-  const SCRAMBLE_VALUES = [89, 39, 179, 150, 218, 82, 58, 252, 177, 52, 186, 123, 120, 64, 242, 133, 143, 161, 121, 179];
-  
+  const SCRAMBLE_VALUES = [
+    89, 39, 179, 150, 218, 82, 58, 252, 177, 52, 186, 123, 120, 64, 242, 133,
+    143, 161, 121, 179,
+  ];
+
   try {
     const str = JSON.stringify(data);
     const hash = createHash('sha1').update(str).digest('hex').toUpperCase();
-    
-    const part1 = PART_1_INDEXES.map(i => hash[i]).join('');
-    const part2 = PART_2_INDEXES.map(i => hash[i]).join('');
-    
+
+    const part1 = PART_1_INDEXES.map((i) => hash[i]).join('');
+    const part2 = PART_2_INDEXES.map((i) => hash[i]).join('');
+
     const part3 = Buffer.alloc(20);
     for (let i = 0; i < SCRAMBLE_VALUES.length; i++) {
       const value = SCRAMBLE_VALUES[i] ^ parseInt(hash.substr(i * 2, 2), 16);
       part3[i] = value;
     }
-    
+
     const b64Part = part3.toString('base64').replace(/[\\/+=]/g, '');
     return `zzc${part1}${b64Part}${part2}`.toLowerCase();
   } catch (error) {
@@ -81,7 +94,12 @@ export interface MusicDetailWithFullInfo extends MusicDetail, MusicResources {
   detail: SongDetailInfo & SongLikes;
 }
 
-function generateToken(server: string, type: string, id: string, secret: string = METING_TOKEN): string {
+function generateToken(
+  server: string,
+  type: string,
+  id: string,
+  secret: string = METING_TOKEN,
+): string {
   const message = `${server}${type}${id}`;
   return createHmac('sha1', secret).update(message).digest('hex');
 }
@@ -89,13 +107,13 @@ function generateToken(server: string, type: string, id: string, secret: string 
 function generateKey(key: Buffer): Buffer {
   const genKey = Buffer.alloc(16);
   key.copy(genKey, 0, 0, Math.min(16, key.length));
-  
+
   for (let i = 16; i < key.length; ) {
     for (let j = 0; j < 16 && i < key.length; j++, i++) {
       genKey[j] ^= key[i];
     }
   }
-  
+
   return genKey;
 }
 
@@ -120,17 +138,17 @@ function aesEncryptECB(text: string, key: Buffer): string {
   const genKey = generateKey(key);
   const cipher = createCipheriv('aes-128-ecb', genKey, Buffer.alloc(0));
   cipher.setAutoPadding(false);
-  
+
   const data = Buffer.from(text, 'utf8');
   const padded = pkcs7Pad(data, 16);
-  
+
   let encrypted = Buffer.alloc(0);
   for (let i = 0; i < padded.length; i += 16) {
     const block = padded.slice(i, i + 16);
     const encryptedBlock = cipher.update(block);
     encrypted = Buffer.concat([encrypted, encryptedBlock]);
   }
-  
+
   return encrypted.toString('hex').toUpperCase();
 }
 
@@ -139,16 +157,16 @@ function aesDecryptECB(encryptedHex: string, key: Buffer): string {
   const genKey = generateKey(key);
   const decipher = createDecipheriv('aes-128-ecb', genKey, Buffer.alloc(0));
   decipher.setAutoPadding(false);
-  
+
   const encrypted = Buffer.from(encryptedHex, 'hex');
   let decrypted = Buffer.alloc(0);
-  
+
   for (let i = 0; i < encrypted.length; i += 16) {
     const block = encrypted.slice(i, i + 16);
     const decryptedBlock = decipher.update(block);
     decrypted = Buffer.concat([decrypted, decryptedBlock]);
   }
-  
+
   const unpadded = pkcs7Unpad(decrypted);
   return unpadded.toString('utf8');
 }
@@ -157,7 +175,7 @@ function eapiEncrypt(path: string, data: string): string {
   const nobodyKnowThis = '36cd479b6b5';
   const text = `nobody${path}use${data}md5forencrypt`;
   const md5 = createHash('md5').update(text).digest('hex');
-  
+
   const encryptedText = `${path}-${nobodyKnowThis}-${data}-${nobodyKnowThis}-${md5}`;
   const encrypted = aesEncryptECB(encryptedText, NETEASE_EAPI_KEY);
   return encrypted;
@@ -166,14 +184,14 @@ function eapiEncrypt(path: string, data: string): string {
 function eapiDecrypt(encData: string): { path: string; data: any } {
   const decrypted = aesDecryptECB(encData, NETEASE_EAPI_KEY);
   const parts = decrypted.split('-36cd479b6b5-');
-  
+
   if (parts.length !== 3) {
     throw new Error('Invalid eapi response format');
   }
-  
+
   return {
     path: parts[0],
-    data: JSON.parse(parts[1])
+    data: JSON.parse(parts[1]),
   };
 }
 
@@ -200,7 +218,12 @@ function getNeteaseCookieHeader(): string {
   }
 }
 
-async function fetchMetingAPI(server: ServerType, type: string, id: string, needAuth: boolean = false): Promise<any> {
+async function fetchMetingAPI(
+  server: ServerType,
+  type: string,
+  id: string,
+  needAuth: boolean = false,
+): Promise<any> {
   const url = new URL(METING_API_BASE);
   url.searchParams.append('server', server);
   url.searchParams.append('type', type);
@@ -214,7 +237,8 @@ async function fetchMetingAPI(server: ServerType, type: string, id: string, need
   const response = await fetch(url.toString());
 
   if (!response.ok) {
-    const errorMessage = response.headers.get('x-error-message') || `HTTP ${response.status}`;
+    const errorMessage =
+      response.headers.get('x-error-message') || `HTTP ${response.status}`;
     throw new Error(`Meting API error: ${errorMessage}`);
   }
 
@@ -226,7 +250,10 @@ async function fetchMetingAPI(server: ServerType, type: string, id: string, need
 }
 
 // QQ音乐API相关函数
-async function fetchQQMusicAPI(url: string, params: Record<string, any>): Promise<any> {
+async function fetchQQMusicAPI(
+  url: string,
+  params: Record<string, any>,
+): Promise<any> {
   const urlObj = new URL(url);
   Object.entries(params).forEach(([key, value]) => {
     urlObj.searchParams.append(key, String(value));
@@ -234,8 +261,9 @@ async function fetchQQMusicAPI(url: string, params: Record<string, any>): Promis
 
   const response = await fetch(urlObj.toString(), {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    },
   });
 
   if (!response.ok) {
@@ -243,7 +271,7 @@ async function fetchQQMusicAPI(url: string, params: Record<string, any>): Promis
   }
 
   const text = await response.text();
-  
+
   // 处理QQ音乐API返回的JSONP格式
   if (text.startsWith('callback(')) {
     const jsonStr = text.replace(/^callback\((.*)\)$/, '$1');
@@ -268,11 +296,11 @@ async function getQQMusicSongDetail(songId: string): Promise<SongInfo[]> {
       outCharset: 'utf-8',
       notice: 0,
       platform: 'yqq.json',
-      needNewCode: 0
+      needNewCode: 0,
     };
 
     const result = await fetchQQMusicAPI(QQ_MUSIC_SONG_DETAIL_URL, params);
-    
+
     // 检查返回的数据结构
     if (!result || !result.data || !result.data.length) {
       console.log('QQ Music API returned empty data');
@@ -280,21 +308,25 @@ async function getQQMusicSongDetail(songId: string): Promise<SongInfo[]> {
     }
 
     const songData = result.data[0];
-    
+
     // QQ音乐API返回的字段名是 mid
     if (!songData.mid) {
       console.log('QQ Music API returned invalid song data');
       return [];
     }
 
-    return [{
-      id: songData.mid,
-      numeric_id: songData.id,
-      name: songData.name,
-      artist: songData.singer ? songData.singer.map((s: any) => s.name).join(',') : '',
-      album: songData.album?.name || '',
-      pic_id: songData.album?.mid || ''
-    }];
+    return [
+      {
+        id: songData.mid,
+        numeric_id: songData.id,
+        name: songData.name,
+        artist: songData.singer
+          ? songData.singer.map((s: any) => s.name).join(',')
+          : '',
+        album: songData.album?.name || '',
+        pic_id: songData.album?.mid || '',
+      },
+    ];
   } catch (error) {
     console.error('Error in getQQMusicSongDetail:', error);
     return [];
@@ -315,15 +347,15 @@ async function getQQMusicLyrics(songId: string): Promise<string> {
       outCharset: 'utf-8',
       notice: 0,
       platform: 'yqq.json',
-      needNewCode: 0
+      needNewCode: 0,
     };
 
     const result = await fetchQQMusicAPI(QQ_MUSIC_LRC_URL, params);
-    
+
     if (!result || !result.lyric) {
       return '';
     }
-    
+
     // QQ音乐歌词是base64编码的
     const decodedLyrics = Buffer.from(result.lyric, 'base64').toString('utf-8');
     return decodedLyrics;
@@ -348,28 +380,28 @@ async function getQQMusicDetailInfo(songId: string): Promise<SongDetailInfo> {
       outCharset: 'utf-8',
       notice: 0,
       platform: 'yqq.json',
-      needNewCode: 0
+      needNewCode: 0,
     };
 
     const result = await fetchQQMusicAPI(QQ_MUSIC_SONG_DETAIL_URL, params);
-    
+
     if (!result || !result.data || !result.data.length) {
       return {};
     }
 
     const songData = result.data[0];
     const detailInfo: SongDetailInfo = {};
-    
+
     // 处理发行时间
     if (songData.time_public) {
       detailInfo.date = songData.time_public;
     }
-    
+
     // 处理语言
     if (songData.language) {
       detailInfo.language = songData.language;
     }
-    
+
     // 处理标签 - QQ音乐的genre是数字代码，需要映射为字符串
     if (songData.genre !== undefined && songData.genre !== null) {
       const genreMap: Record<number, string> = {
@@ -384,17 +416,17 @@ async function getQQMusicDetailInfo(songId: string): Promise<SongDetailInfo> {
         9: '影视原声',
         10: 'ACG',
         11: '古风',
-        12: '其他'
+        12: '其他',
       };
       const genreName = genreMap[songData.genre] || '其他';
       detailInfo.tags = [genreName];
     }
-    
+
     // 处理BPM
     if (songData.bpm) {
       detailInfo.bpm = String(songData.bpm);
     }
-    
+
     return detailInfo;
   } catch (error) {
     console.error('Error fetching QQ music detail info:', error);
@@ -402,7 +434,10 @@ async function getQQMusicDetailInfo(songId: string): Promise<SongDetailInfo> {
   }
 }
 
-async function getQQMusicLikes(songId: string, numericId?: number): Promise<SongLikes> {
+async function getQQMusicLikes(
+  songId: string,
+  numericId?: number,
+): Promise<SongLikes> {
   try {
     let songNumericId = numericId;
     if (!songNumericId) {
@@ -428,25 +463,26 @@ async function getQQMusicLikes(songId: string, numericId?: number): Promise<Song
         format: 'json',
         inCharset: 'utf-8',
         outCharset: 'utf-8',
-        uid: '3931641530'
+        uid: '3931641530',
       },
       'music.musicasset.SongFavRead.GetSongFansNumberById': {
         module: 'music.musicasset.SongFavRead',
         method: 'GetSongFansNumberById',
         param: {
-          v_songId: [songNumericId]
-        }
-      }
+          v_songId: [songNumericId],
+        },
+      },
     };
 
     const response = await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36 Edg/116.0.1938.54',
-        'Referer': 'https://y.qq.com/'
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36 Edg/116.0.1938.54',
+        Referer: 'https://y.qq.com/',
       },
-      body: JSON.stringify(requestData)
+      body: JSON.stringify(requestData),
     });
 
     if (!response.ok) {
@@ -455,9 +491,13 @@ async function getQQMusicLikes(songId: string, numericId?: number): Promise<Song
     }
 
     const result = await response.json();
-    console.log('QQ Music Likes API response:', JSON.stringify(result, null, 2));
-    
-    const apiResult = result['music.musicasset.SongFavRead.GetSongFansNumberById'];
+    console.log(
+      'QQ Music Likes API response:',
+      JSON.stringify(result, null, 2),
+    );
+
+    const apiResult =
+      result['music.musicasset.SongFavRead.GetSongFansNumberById'];
     if (apiResult && apiResult.code === 0 && apiResult.data) {
       const data = apiResult.data;
       if (data.m_show && data.m_show[songNumericId]) {
@@ -480,17 +520,20 @@ async function getQQMusicLikes(songId: string, numericId?: number): Promise<Song
 function parseCountString(countStr: string): number {
   const match = countStr.match(/(\d+(?:\.\d+)?)([w万]?)/);
   if (!match) return 0;
-  
+
   const num = parseFloat(match[1]);
   const unit = match[2];
-  
+
   if (unit === 'w' || unit === '万') {
     return Math.floor(num * 10000);
   }
   return Math.floor(num);
 }
 
-export async function getSongDetail(server: ServerType, songId: string): Promise<SongInfo[]> {
+export async function getSongDetail(
+  server: ServerType,
+  songId: string,
+): Promise<SongInfo[]> {
   if (server === 'qq') {
     // 优先使用QQ音乐API获取歌曲详情
     try {
@@ -504,7 +547,7 @@ export async function getSongDetail(server: ServerType, songId: string): Promise
     // QQ音乐API失败，直接返回空数组，不尝试使用Meting API
     return [];
   }
-  
+
   // 只有网易云音乐才使用Meting API
   const data = await fetchMetingAPI(server, 'song', songId);
   const songs = JSON.parse(data);
@@ -515,7 +558,7 @@ export async function getSongDetail(server: ServerType, songId: string): Promise
       const url = new URL(song.pic);
       picId = url.searchParams.get('id') || '';
     }
-    
+
     return {
       id: songId,
       name: song.title,
@@ -526,35 +569,50 @@ export async function getSongDetail(server: ServerType, songId: string): Promise
   });
 }
 
-export async function getSongDetailByNameArtist(server: ServerType, name: string, artist: string): Promise<(MusicDetail & MusicResources) | null> {
+export async function getSongDetailByNameArtist(
+  server: ServerType,
+  name: string,
+  artist: string,
+): Promise<(MusicDetail & MusicResources) | null> {
   try {
-    console.log(`[Music] getSongDetailByNameArtist: searching for "${name}" - ${artist}`);
-    
+    console.log(
+      `[Music] getSongDetailByNameArtist: searching for "${name}" - ${artist}`,
+    );
+
     // Search for the song by name
     const searchResults = await searchSongs(name, server);
     console.log(`[Music] Search results: ${searchResults.length} found`);
-    
+
     if (searchResults.length === 0) {
       console.warn(`[Music] No search results for "${name}" by "${artist}"`);
       return null;
     }
-    
+
     // Find best match: exact name and artist match
     const exactMatch = searchResults.find(
-      s => s.name.toLowerCase() === name.toLowerCase() && 
-           s.artist.toLowerCase() === artist.toLowerCase()
+      (s) =>
+        s.name.toLowerCase() === name.toLowerCase() &&
+        s.artist.toLowerCase() === artist.toLowerCase(),
     );
-    
+
     const selectedResult = exactMatch || searchResults[0];
-    console.log(`[Music] Selected: "${selectedResult.name}" - "${selectedResult.artist}", ID: "${selectedResult.id}"`);
-    
+    console.log(
+      `[Music] Selected: "${selectedResult.name}" - "${selectedResult.artist}", ID: "${selectedResult.id}"`,
+    );
+
     // Use the found song ID to get full details
     try {
-      const detail = await getMusicDetailWithResources(server, selectedResult.id);
+      const detail = await getMusicDetailWithResources(
+        server,
+        selectedResult.id,
+      );
       console.log(`[Music] Got details for song ID: ${selectedResult.id}`);
       return detail;
     } catch (error) {
-      console.error(`[Music] Failed to get details for ID "${selectedResult.id}":`, error.message);
+      console.error(
+        `[Music] Failed to get details for ID "${selectedResult.id}":`,
+        error.message,
+      );
       return null;
     }
   } catch (error) {
@@ -563,7 +621,10 @@ export async function getSongDetailByNameArtist(server: ServerType, name: string
   }
 }
 
-export async function getLyrics(server: ServerType, songId: string): Promise<string> {
+export async function getLyrics(
+  server: ServerType,
+  songId: string,
+): Promise<string> {
   if (server === 'qq') {
     // 优先使用QQ音乐API获取歌词
     try {
@@ -574,7 +635,7 @@ export async function getLyrics(server: ServerType, songId: string): Promise<str
       return '';
     }
   }
-  
+
   try {
     const lyrics = await fetchMetingAPI(server, 'lrc', songId, true);
     // Ensure we return a string
@@ -589,7 +650,10 @@ export async function getLyrics(server: ServerType, songId: string): Promise<str
   }
 }
 
-export async function getAudioUrl(server: ServerType, songId: string): Promise<string> {
+export async function getAudioUrl(
+  server: ServerType,
+  songId: string,
+): Promise<string> {
   if (server === 'qq') {
     // 优先使用QQ音乐API获取音频URL
     try {
@@ -600,11 +664,14 @@ export async function getAudioUrl(server: ServerType, songId: string): Promise<s
       return '';
     }
   }
-  
+
   return await fetchMetingAPI(server, 'url', songId, true);
 }
 
-export async function getPictureUrl(server: ServerType, picId: string): Promise<string> {
+export async function getPictureUrl(
+  server: ServerType,
+  picId: string,
+): Promise<string> {
   if (server === 'qq') {
     // 优先使用QQ音乐API获取图片URL
     try {
@@ -615,11 +682,15 @@ export async function getPictureUrl(server: ServerType, picId: string): Promise<
       return '';
     }
   }
-  
+
   return await fetchMetingAPI(server, 'pic', picId, true);
 }
 
-export async function getMusicResources(server: ServerType, songId: string, picId?: string): Promise<MusicResources> {
+export async function getMusicResources(
+  server: ServerType,
+  songId: string,
+  picId?: string,
+): Promise<MusicResources> {
   const [audioUrl, lyrics, pictureUrl] = await Promise.all([
     getAudioUrl(server, songId),
     getLyrics(server, songId),
@@ -633,12 +704,15 @@ export async function getMusicResources(server: ServerType, songId: string, picI
   };
 }
 
-export async function getMusicDetailWithResources(server: ServerType, songId: string): Promise<MusicDetail & MusicResources> {
+export async function getMusicDetailWithResources(
+  server: ServerType,
+  songId: string,
+): Promise<MusicDetail & MusicResources> {
   const songs = await getSongDetail(server, songId);
   if (songs.length === 0) {
     throw new Error(`No song found with ID ${songId} on ${server}`);
   }
-  
+
   const song = songs[0];
 
   const resources = await getMusicResources(server, songId, song.pic_id);
@@ -656,26 +730,31 @@ export async function getMusicDetailWithResources(server: ServerType, songId: st
   };
 }
 
-export async function getSongLikes(server: ServerType, songId: string, numericId?: number): Promise<SongLikes> {
+export async function getSongLikes(
+  server: ServerType,
+  songId: string,
+  numericId?: number,
+): Promise<SongLikes> {
   if (server === 'qq') {
     // 使用QQ音乐API获取点赞数
     return await getQQMusicLikes(songId, numericId);
   }
-  
+
   // 网易云音乐获取点赞数逻辑保持不变
   const header = {
-    clientSign: 'BC:FC:E7:8B:4C:07@@@ZTC82T0AB251120L4C@@@@@@bbf7187108ff4025bbf98daddd476bca2b700b25f7d220e7a96811b59382e740',
+    clientSign:
+      'BC:FC:E7:8B:4C:07@@@ZTC82T0AB251120L4C@@@@@@bbf7187108ff4025bbf98daddd476bca2b700b25f7d220e7a96811b59382e740',
     os: 'pc',
     appver: '3.1.25.204860',
     deviceId: '3BA3DFCFE05873F6C16DE3AA99FAC8C4DB1B44520250B239359C',
     requestId: 0,
-    osver: 'Microsoft-Windows-11-Professional-build-26200-64bit'
+    osver: 'Microsoft-Windows-11-Professional-build-26200-64bit',
   };
 
   const data = {
     songId,
     e_r: true,
-    header: JSON.stringify(header)
+    header: JSON.stringify(header),
   };
 
   const encrypted = eapiEncrypt('/api/song/red/count', JSON.stringify(data));
@@ -683,9 +762,12 @@ export async function getSongLikes(server: ServerType, songId: string, numericId
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/3.1.25.204860',
-    'Accept': '*/*',
-    'mconfig-info': JSON.stringify({ IuRPVVmc3WWul9fT: { version: 894976, appver: '3.1.25.204860' } }),
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/3.1.25.204860',
+    Accept: '*/*',
+    'mconfig-info': JSON.stringify({
+      IuRPVVmc3WWul9fT: { version: 894976, appver: '3.1.25.204860' },
+    }),
   };
 
   if (cookieHeader) {
@@ -703,7 +785,7 @@ export async function getSongLikes(server: ServerType, songId: string, numericId
   }
 
   const buffer = await response.arrayBuffer();
-  
+
   if (buffer.byteLength === 0) {
     throw new Error('Netease API returned empty response');
   }
@@ -714,7 +796,9 @@ export async function getSongLikes(server: ServerType, songId: string, numericId
   } catch (error) {
     console.error('Failed to decrypt response:');
     console.error('Response hex:', Buffer.from(buffer).toString('hex'));
-    throw new Error(`Failed to decrypt response: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to decrypt response: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   if (result.code !== 200) {
@@ -726,43 +810,57 @@ export async function getSongLikes(server: ServerType, songId: string, numericId
   };
 }
 
-export async function getSongDetailInfo(server: ServerType, songId: string): Promise<SongDetailInfo> {
+export async function getSongDetailInfo(
+  server: ServerType,
+  songId: string,
+): Promise<SongDetailInfo> {
   if (server === 'qq') {
     // 优先使用QQ音乐API获取详细信息
     return await getQQMusicDetailInfo(songId);
   }
-  
+
   // 网易云音乐获取详细信息逻辑保持不变
   // 首先尝试使用不依赖_sign的API获取基本信息
   try {
-    const basicResponse = await fetch(`https://music.163.com/api/song/detail?id=${songId}&ids=%5B${songId}%5D`, {
-      method: 'GET',
-      headers: {
-        'Cookie': getNeteaseCookieHeader(),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
-    });
-    
+    const basicResponse = await fetch(
+      `https://music.163.com/api/song/detail?id=${songId}&ids=%5B${songId}%5D`,
+      {
+        method: 'GET',
+        headers: {
+          Cookie: getNeteaseCookieHeader(),
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        },
+      },
+    );
+
     if (basicResponse.ok) {
       const basicResult = await basicResponse.json();
-      if (basicResult.code === 200 && basicResult.songs && basicResult.songs.length > 0) {
+      if (
+        basicResult.code === 200 &&
+        basicResult.songs &&
+        basicResult.songs.length > 0
+      ) {
         const song = basicResult.songs[0];
         const basicInfo: SongDetailInfo = {};
-        
+
         // 从专辑的publishTime中提取发行时间
         if (song.album?.publishTime) {
-          basicInfo.date = new Date(song.album.publishTime).toISOString().split('T')[0];
+          basicInfo.date = new Date(song.album.publishTime)
+            .toISOString()
+            .split('T')[0];
         }
-        
+
         // 然后尝试使用wiki API获取更详细的信息（如语言、标签、BPM）
         try {
           const header = {
-            clientSign: 'BC:FC:E7:8B:4C:07@@@ZTC82T0AB251120L4C@@@@@@bbf7187108ff4025bbf98daddd476bca2b700b25f7d220e7a96811b59382e740',
+            clientSign:
+              'BC:FC:E7:8B:4C:07@@@ZTC82T0AB251120L4C@@@@@@bbf7187108ff4025bbf98daddd476bca2b700b25f7d220e7a96811b59382e740',
             os: 'pc',
             appver: '3.1.25.204860',
             deviceId: '3BA3DFCFE05873F6C16DE3AA99FAC8C4DB1B44520250B239359C',
             requestId: 0,
-            osver: 'Microsoft-Windows-11-Professional-build-26200-64bit'
+            osver: 'Microsoft-Windows-11-Professional-build-26200-64bit',
           };
 
           const data = {
@@ -770,17 +868,23 @@ export async function getSongDetailInfo(server: ServerType, songId: string): Pro
             _scver: '1',
             _sign: 'a03289cc15f557cac97465f76efa7839',
             e_r: true,
-            header: JSON.stringify(header)
+            header: JSON.stringify(header),
           };
-          
-          const encrypted = eapiEncrypt('/api/music/wiki/home/song/desktop/get', JSON.stringify(data));
+
+          const encrypted = eapiEncrypt(
+            '/api/music/wiki/home/song/desktop/get',
+            JSON.stringify(data),
+          );
           const cookieHeader = getNeteaseCookieHeader();
 
           const headers: Record<string, string> = {
             'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/3.1.25.204860',
-            'Accept': '*/*',
-            'mconfig-info': JSON.stringify({ IuRPVVmc3WWul9fT: { version: 894976, appver: '3.1.25.204860' } }),
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/3.1.25.204860',
+            Accept: '*/*',
+            'mconfig-info': JSON.stringify({
+              IuRPVVmc3WWul9fT: { version: 894976, appver: '3.1.25.204860' },
+            }),
           };
 
           if (cookieHeader) {
@@ -795,22 +899,29 @@ export async function getSongDetailInfo(server: ServerType, songId: string): Pro
 
           if (response.ok) {
             const buffer = await response.arrayBuffer();
-            
+
             if (buffer.byteLength > 0) {
               let result;
               try {
                 result = dataDecrypt(Buffer.from(buffer));
               } catch (error) {
                 console.error('Failed to decrypt response:');
-                console.error('Response hex:', Buffer.from(buffer).toString('hex'));
+                console.error(
+                  'Response hex:',
+                  Buffer.from(buffer).toString('hex'),
+                );
                 // 解密失败，返回基本信息
                 return basicInfo;
               }
 
-              if (result.code === 200 && result.data?.wikiSubBlockBaseInfoVo?.wikiSubElementVos) {
-                const elements = result.data.wikiSubBlockBaseInfoVo.wikiSubElementVos;
+              if (
+                result.code === 200 &&
+                result.data?.wikiSubBlockBaseInfoVo?.wikiSubElementVos
+              ) {
+                const elements =
+                  result.data.wikiSubBlockBaseInfoVo.wikiSubElementVos;
                 const detailInfo: SongDetailInfo = {
-                  ...basicInfo
+                  ...basicInfo,
                 };
 
                 for (const element of elements) {
@@ -818,8 +929,14 @@ export async function getSongDetailInfo(server: ServerType, songId: string): Pro
                     detailInfo.date = element.content;
                   } else if (element.title === '语种') {
                     detailInfo.language = element.content;
-                  } else if (element.title === '曲风' && element.wikiSubMetaVos && element.wikiSubMetaVos.length > 0) {
-                    detailInfo.tags = element.wikiSubMetaVos.map((meta: any) => meta.text);
+                  } else if (
+                    element.title === '曲风' &&
+                    element.wikiSubMetaVos &&
+                    element.wikiSubMetaVos.length > 0
+                  ) {
+                    detailInfo.tags = element.wikiSubMetaVos.map(
+                      (meta: any) => meta.text,
+                    );
                   } else if (element.title === '发行版本') {
                     if (!detailInfo.tags) {
                       detailInfo.tags = [];
@@ -843,19 +960,21 @@ export async function getSongDetailInfo(server: ServerType, songId: string): Pro
           console.error('Error fetching song wiki info:', wikiError);
           // wiki API失败，返回基本信息
         }
-        
+
         return basicInfo;
       }
     }
   } catch (basicError) {
     console.error('Error fetching basic song info:', basicError);
   }
-  
+
   return {};
 }
 
 // 优先使用QQ音乐API，失败后回退到网易云API
-export async function getMusicDetailWithLikesPriority(songId: string): Promise<MusicDetailWithFullInfo> {
+export async function getMusicDetailWithLikesPriority(
+  songId: string,
+): Promise<MusicDetailWithFullInfo> {
   // 首先尝试QQ音乐
   try {
     console.log(`尝试使用QQ音乐API获取歌曲 ${songId} 详情...`);
@@ -872,12 +991,17 @@ export async function getMusicDetailWithLikesPriority(songId: string): Promise<M
       return result;
     } catch (neteaseError) {
       console.error(`网易云API获取也失败: ${neteaseError.message}`);
-      throw new Error(`所有音乐平台API获取失败: QQ音乐错误=${qqError.message}, 网易云错误=${neteaseError.message}`);
+      throw new Error(
+        `所有音乐平台API获取失败: QQ音乐错误=${qqError.message}, 网易云错误=${neteaseError.message}`,
+      );
     }
   }
 }
 
-export async function getMusicDetailWithLikes(server: ServerType, songId: string): Promise<MusicDetailWithFullInfo> {
+export async function getMusicDetailWithLikes(
+  server: ServerType,
+  songId: string,
+): Promise<MusicDetailWithFullInfo> {
   const [detail, likes, detailInfo] = await Promise.all([
     getMusicDetailWithResources(server, songId),
     getSongLikes(server, songId),
@@ -902,7 +1026,10 @@ export async function getMusicDetailWithLikes(server: ServerType, songId: string
 }
 
 // 搜索歌曲
-export async function searchSongs(keyword: string, server: ServerType): Promise<SongInfo[]> {
+export async function searchSongs(
+  keyword: string,
+  server: ServerType,
+): Promise<SongInfo[]> {
   try {
     if (server === 'qq') {
       // QQ Music search not implemented via this endpoint
@@ -923,9 +1050,12 @@ export async function searchSongs(keyword: string, server: ServerType): Promise<
     const data = await response.json();
     // Log raw response to see all fields
     if (data && data.length > 0) {
-      console.log('[Search] Raw API response (first item):', JSON.stringify(data[0], null, 2));
+      console.log(
+        '[Search] Raw API response (first item):',
+        JSON.stringify(data[0], null, 2),
+      );
     }
-    
+
     // Meting API search returns complete song objects with url, pic, lrc URLs
     // Extract the real song ID from the URL parameter
     return data.map((item: any, index: number) => {
@@ -935,14 +1065,21 @@ export async function searchSongs(keyword: string, server: ServerType): Promise<
         const urlMatch = item.url.match(/[?&]id=([^&]+)/);
         id = urlMatch ? urlMatch[1] : '';
       }
-      
+
       // Fallback to other possible ID fields or create synthetic ID
       if (!id) {
-        id = item.id || item.mid || item.songId || item.songmid || `${item.title || item.name}__${item.author}`;
+        id =
+          item.id ||
+          item.mid ||
+          item.songId ||
+          item.songmid ||
+          `${item.title || item.name}__${item.author}`;
       }
-      
-      console.log(`[Search] Item ${index}: id="${id}", name="${item.title || item.name}", artist="${item.author}"`);
-      
+
+      console.log(
+        `[Search] Item ${index}: id="${id}", name="${item.title || item.name}", artist="${item.author}"`,
+      );
+
       return {
         id: String(id),
         name: item.title || item.name || '',

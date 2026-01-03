@@ -13,169 +13,33 @@
     .sketch-border { border: 2px solid #2d2d2d; box-shadow: 3px 3px 0px rgba(0, 0, 0, 0.2); }
     .paper-bg { background-color: #faf8f5; }
   </style>
-</head>
-<body class="paper-bg min-h-screen">
-  <div id="app">
-    <!-- 登录页 -->
-    <div id="login-page" class="min-h-screen flex items-center justify-center">
-      <div class="sketch-border rounded-xl p-8 bg-white max-w-md w-full mx-4">
-        <h1 class="hand-font text-4xl text-center mb-6">🎵 Song Guessr</h1>
-        <h2 class="text-xl text-center mb-8 text-gray-600">管理面板</h2>
-        <form id="login-form" class="space-y-4">
-          <div>
-            <label class="block text-sm mb-1">用户名</label>
-            <input type="text" id="username" class="w-full px-4 py-2 sketch-border rounded-lg" required>
-          </div>
-          <div>
-            <label class="block text-sm mb-1">密码</label>
-            <input type="password" id="password" class="w-full px-4 py-2 sketch-border rounded-lg" required>
-          </div>
-          <button type="submit" class="w-full py-3 sketch-border rounded-lg bg-orange-400 text-white font-bold hover:-translate-y-0.5 transition-transform">
-            登录
-          </button>
-          <p id="login-error" class="text-red-500 text-center text-sm hidden"></p>
-        </form>
-      </div>
-    </div>
-
-    <!-- 主面板 -->
-    <div id="admin-panel" class="hidden">
-      <!-- 导航栏 -->
-      <nav class="sketch-border bg-white mb-6">
-        <div class="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
-          <h1 class="hand-font text-2xl">🎵 Song Guessr 管理</h1>
-          <div class="flex items-center gap-4">
-            <span id="admin-username" class="text-gray-600"></span>
-            <button onclick="logout()" class="px-4 py-2 sketch-border rounded-lg hover:bg-gray-100">退出</button>
-          </div>
-        </div>
-      </nav>
-
-      <div class="max-w-7xl mx-auto px-4 pb-8">
-        <!-- Tab导航 -->
-        <div class="flex gap-2 mb-6 overflow-x-auto">
-          <button onclick="switchTab('dashboard')" class="tab-btn px-6 py-2 sketch-border rounded-lg bg-orange-400 text-white" data-tab="dashboard">📊 仪表盘</button>
-          <button onclick="switchTab('rooms')" class="tab-btn px-6 py-2 sketch-border rounded-lg bg-white" data-tab="rooms">🏠 房间管理</button>
-          <button onclick="switchTab('stats')" class="tab-btn px-6 py-2 sketch-border rounded-lg bg-white" data-tab="stats">📈 游戏统计</button>
-          <button onclick="switchTab('errors')" class="tab-btn px-6 py-2 sketch-border rounded-lg bg-white" data-tab="errors">⚠️ 错误日志</button>
-          <button onclick="switchTab('telemetry')" class="tab-btn px-6 py-2 sketch-border rounded-lg bg-white" data-tab="telemetry">📡 遥测数据</button>
-        </div>
-
-        <!-- 仪表盘 -->
-        <div id="tab-dashboard" class="tab-content">
-          <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <div class="sketch-border rounded-xl p-4 bg-white">
-              <div class="text-3xl mb-2">🎮</div>
-              <div class="text-2xl font-bold" id="stat-total-games">-</div>
-              <div class="text-gray-500 text-sm">总游戏数</div>
-            </div>
-            <div class="sketch-border rounded-xl p-4 bg-white">
-              <div class="text-3xl mb-2">👥</div>
-              <div class="text-2xl font-bold" id="stat-total-players">-</div>
-              <div class="text-gray-500 text-sm">总玩家数</div>
-            </div>
-            <div class="sketch-border rounded-xl p-4 bg-white">
-              <div class="text-3xl mb-2">🟢</div>
-              <div class="text-2xl font-bold" id="stat-active-today">-</div>
-              <div class="text-gray-500 text-sm">今日活跃</div>
-            </div>
-            <div class="sketch-border rounded-xl p-4 bg-white">
-              <div class="text-3xl mb-2">⚠️</div>
-              <div class="text-2xl font-bold" id="stat-errors">-</div>
-              <div class="text-gray-500 text-sm">24h错误</div>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="sketch-border rounded-xl p-4 bg-white">
-              <h3 class="hand-font text-xl mb-4">🏆 排行榜</h3>
-              <div id="leaderboard" class="space-y-2"></div>
-            </div>
-            <div class="sketch-border rounded-xl p-4 bg-white">
-              <h3 class="hand-font text-xl mb-4">📊 最近游戏</h3>
-              <div id="recent-games" class="space-y-2"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 房间管理 -->
-        <div id="tab-rooms" class="tab-content hidden">
-          <div class="sketch-border rounded-xl p-4 bg-white">
-            <div class="flex justify-between items-center mb-4">
-              <h3 class="hand-font text-xl">🏠 活跃房间</h3>
-              <button onclick="loadRooms()" class="px-4 py-2 sketch-border rounded-lg hover:bg-gray-100">刷新</button>
-            </div>
-            <div id="rooms-list" class="space-y-2"></div>
-          </div>
-        </div>
-
-        <!-- 游戏统计 -->
-        <div id="tab-stats" class="tab-content hidden">
-          <div class="sketch-border rounded-xl p-4 bg-white">
-            <h3 class="hand-font text-xl mb-4">📈 游戏历史</h3>
-            <div id="game-stats-list" class="space-y-2"></div>
-          </div>
-        </div>
-
-        <!-- 错误日志 -->
-        <div id="tab-errors" class="tab-content hidden">
-          <div class="sketch-border rounded-xl p-4 bg-white">
-            <div class="flex justify-between items-center mb-4">
-              <h3 class="hand-font text-xl">⚠️ 错误日志</h3>
-              <div class="flex gap-2">
-                <select id="error-source" onchange="loadErrors()" class="px-3 py-2 sketch-border rounded-lg">
-                  <option value="">所有来源</option>
-                  <option value="client">客户端</option>
-                  <option value="server">服务端</option>
-                </select>
-              </div>
-            </div>
-            <div id="errors-list" class="space-y-2"></div>
-          </div>
-        </div>
-
-        <!-- 遥测数据 -->
-        <div id="tab-telemetry" class="tab-content hidden">
-          <div class="sketch-border rounded-xl p-4 bg-white">
-            <h3 class="hand-font text-xl mb-4">📡 遥测数据</h3>
-            <div id="telemetry-list" class="space-y-2"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <script>
     let token = localStorage.getItem('admin_token');
     let currentTab = 'dashboard';
+    let activityChart;
 
-    // 检查登录状态
     if (token) {
       showAdminPanel();
-      loadDashboard();
+      loadDashboard(7);
     }
 
-    // 登录
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const username = document.getElementById('username').value;
       const password = document.getElementById('password').value;
-
       try {
         const res = await fetch('/api/admin/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ username, password }),
         });
-
         if (!res.ok) throw new Error('登录失败');
-
         const data = await res.json();
         token = data.token;
         localStorage.setItem('admin_token', token);
         document.getElementById('admin-username').textContent = data.admin.username;
         showAdminPanel();
-        loadDashboard();
+        loadDashboard(7);
       } catch (err) {
         document.getElementById('login-error').textContent = '用户名或密码错误';
         document.getElementById('login-error').classList.remove('hidden');
@@ -199,59 +63,72 @@
         btn.classList.remove('bg-orange-400', 'text-white');
         btn.classList.add('bg-white');
       });
-      document.querySelector(`[data-tab="${tab}"]`).classList.add('bg-orange-400', 'text-white');
-      document.querySelector(`[data-tab="${tab}"]`).classList.remove('bg-white');
+      const btn = document.querySelector(`[data-tab="${tab}"]`);
+      if (btn) {
+        btn.classList.add('bg-orange-400', 'text-white');
+        btn.classList.remove('bg-white');
+      }
 
       document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
       document.getElementById(`tab-${tab}`).classList.remove('hidden');
 
-      if (tab === 'dashboard') loadDashboard();
+      if (tab === 'dashboard') loadDashboard(7);
       else if (tab === 'rooms') loadRooms();
-      else if (tab === 'stats') loadGameStats();
       else if (tab === 'errors') loadErrors();
-      else if (tab === 'telemetry') loadTelemetry();
     }
 
     async function apiGet(endpoint) {
-      const res = await fetch(endpoint, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const res = await fetch(endpoint, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) {
-        if (res.status === 401) {
-          logout();
-          throw new Error('认证失败');
-        }
+        if (res.status === 401) logout();
         throw new Error('请求失败');
       }
       return res.json();
     }
 
-    async function apiDelete(endpoint) {
+    async function apiPost(endpoint, body = {}) {
       const res = await fetch(endpoint, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
       });
+      if (!res.ok) throw new Error('请求失败');
+      return res.json();
+    }
+
+    async function apiDelete(endpoint) {
+      const res = await fetch(endpoint, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
       return res.ok;
     }
 
-    async function loadDashboard() {
+    async function loadDashboard(range = 7) {
       try {
-        const data = await apiGet('/api/admin/dashboard');
-        document.getElementById('stat-total-games').textContent = data.totalGames;
-        document.getElementById('stat-total-players').textContent = data.totalPlayers;
-        document.getElementById('stat-active-today').textContent = data.activeToday;
-        document.getElementById('stat-errors').textContent = data.errorCount24h;
+        document.querySelectorAll('.range-btn').forEach(btn => {
+          btn.classList.toggle('bg-orange-200', btn.dataset.range == range);
+        });
 
-        // 排行榜
-        document.getElementById('leaderboard').innerHTML = data.topPlayers.map((p, i) => `
+        const [base, activity] = await Promise.all([
+          apiGet('/api/admin/dashboard'),
+          apiGet(`/api/admin/activity?range=${range}`),
+        ]);
+
+        document.getElementById('stat-total-games').textContent = base.totalGames;
+        document.getElementById('stat-total-players').textContent = base.totalPlayers;
+        document.getElementById('stat-active-today').textContent = base.activeToday;
+        document.getElementById('stat-errors').textContent = base.errorCount24h;
+
+        document.getElementById('stat-active-ip').textContent = activity.activeIpCount;
+        document.getElementById('stat-guesses').textContent = activity.guessCount;
+        document.getElementById('stat-errors-range').textContent = activity.errorCount;
+
+        document.getElementById('leaderboard').innerHTML = base.topPlayers.map((p, i) => `
           <div class="flex justify-between items-center p-2 bg-gray-50 rounded">
-            <span>${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i+1)+'.'} ${p.playerName}</span>
+            <span>${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1) + '.'} ${p.playerName}</span>
             <span class="font-bold">${p.totalScore} 分</span>
           </div>
         `).join('');
 
-        // 最近游戏
-        document.getElementById('recent-games').innerHTML = data.recentGames.map(g => `
+        document.getElementById('recent-games').innerHTML = base.recentGames.map(g => `
           <div class="p-2 bg-gray-50 rounded">
             <div class="flex justify-between">
               <span class="font-bold">${g.roomName}</span>
@@ -260,6 +137,26 @@
             <div class="text-sm text-gray-500">玩家: ${g.playerCount} | 回合: ${g.roundCount}</div>
           </div>
         `).join('');
+
+        const labels = activity.series.map(s => s.date);
+        const guessData = activity.series.map(s => s.guesses);
+        const errorData = activity.series.map(s => s.errors);
+        const ipData = activity.series.map(s => s.activeIps);
+
+        const ctx = document.getElementById('activity-chart').getContext('2d');
+        if (activityChart) activityChart.destroy();
+        activityChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              { label: '猜测', data: guessData, borderColor: '#f97316', tension: 0.2 },
+              { label: '错误', data: errorData, borderColor: '#ef4444', tension: 0.2 },
+              { label: '活跃IP', data: ipData, borderColor: '#16a34a', tension: 0.2 },
+            ],
+          },
+          options: { responsive: true, plugins: { legend: { display: true } } },
+        });
       } catch (err) {
         console.error('加载仪表盘失败:', err);
       }
@@ -268,19 +165,33 @@
     async function loadRooms() {
       try {
         const rooms = await apiGet('/api/admin/rooms');
-        document.getElementById('rooms-list').innerHTML = rooms.length === 0 
+        document.getElementById('rooms-list').innerHTML = rooms.length === 0
           ? '<p class="text-gray-500 text-center py-4">暂无活跃房间</p>'
           : rooms.map(r => `
-            <div class="flex justify-between items-center p-3 bg-gray-50 rounded">
-              <div>
-                <div class="font-bold">${r.name} ${r.isPrivate ? '🔒' : ''}</div>
-                <div class="text-sm text-gray-500">
-                  房主: ${r.hostName} | 玩家: ${r.playerCount}/${r.maxPlayers} | 状态: ${r.status}
+            <div class="p-3 bg-gray-50 rounded space-y-2">
+              <div class="flex justify-between items-center">
+                <div>
+                  <div class="font-bold">${r.name} ${r.isPrivate ? '🔒' : ''}</div>
+                  <div class="text-sm text-gray-500">房主: ${r.hostName} | 玩家: ${r.playerCount}/${r.maxPlayers} | 状态: ${r.status}</div>
+                  <div class="text-xs text-gray-400">当前轮: ${r.currentRound || '—'}</div>
                 </div>
+                <button onclick="dissolveRoom('${r.id}')" class="px-3 py-1 sketch-border rounded bg-red-100 text-red-600 hover:bg-red-200">解散</button>
               </div>
-              <button onclick="dissolveRoom('${r.id}')" class="px-3 py-1 sketch-border rounded bg-red-100 text-red-600 hover:bg-red-200">
-                解散
-              </button>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                ${r.players.map(p => `
+                  <div class="p-2 bg-white rounded sketch-border flex items-center justify-between">
+                    <div>
+                      <div class="font-bold">${p.name}${p.isHost ? ' 👑' : ''}</div>
+                      <div class="text-xs text-gray-500">分数:${p.score} | ${p.isReady ? '已准备' : '未准备'} | ${p.connected ? '在线' : '离线'}</div>
+                    </div>
+                    <div class="flex gap-1">
+                      <button class="px-2 py-1 text-xs sketch-border rounded" onclick="transferHost('${r.id}','${p.name}')">设为房主</button>
+                      <button class="px-2 py-1 text-xs sketch-border rounded" onclick="prioritizeSubmitter('${r.id}','${p.name}')">置顶出题</button>
+                      <button class="px-2 py-1 text-xs sketch-border rounded bg-red-100 text-red-600" onclick="kickPlayer('${r.id}','${p.name}')">踢出</button>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
             </div>
           `).join('');
       } catch (err) {
@@ -294,24 +205,19 @@
       loadRooms();
     }
 
-    async function loadGameStats() {
-      try {
-        const { data } = await apiGet('/api/admin/stats/games?limit=20');
-        document.getElementById('game-stats-list').innerHTML = data.map(g => `
-          <div class="p-3 bg-gray-50 rounded">
-            <div class="flex justify-between">
-              <span class="font-bold">${g.roomName}</span>
-              <span class="${g.completed ? 'text-green-600' : 'text-yellow-600'}">${g.completed ? '已完成' : '进行中'}</span>
-            </div>
-            <div class="text-sm text-gray-500">
-              房主: ${g.hostName} | 玩家: ${g.playerCount} | 回合: ${g.roundCount}
-            </div>
-            <div class="text-xs text-gray-400">${new Date(g.startTime).toLocaleString()}</div>
-          </div>
-        `).join('');
-      } catch (err) {
-        console.error('加载游戏统计失败:', err);
-      }
+    async function kickPlayer(roomId, playerName) {
+      await apiPost(`/api/admin/rooms/${roomId}/kick`, { playerName });
+      loadRooms();
+    }
+
+    async function transferHost(roomId, playerName) {
+      await apiPost(`/api/admin/rooms/${roomId}/transfer-host`, { playerName });
+      loadRooms();
+    }
+
+    async function prioritizeSubmitter(roomId, playerName) {
+      await apiPost(`/api/admin/rooms/${roomId}/assign-submitter`, { playerName });
+      loadRooms();
     }
 
     async function loadErrors() {
@@ -327,6 +233,7 @@
                 <span class="text-gray-500 text-xs">${new Date(e.timestamp).toLocaleString()}</span>
               </div>
               <div class="text-sm mt-1">${e.message || '无消息'}</div>
+              ${e.ip ? `<div class="text-xs text-gray-500">IP: ${e.ip}</div>` : ''}
               ${e.stack ? `<pre class="text-xs text-gray-500 mt-2 overflow-auto max-h-20">${e.stack}</pre>` : ''}
             </div>
           `).join('');
@@ -335,23 +242,7 @@
       }
     }
 
-    async function loadTelemetry() {
-      try {
-        const { data } = await apiGet('/api/admin/telemetry?limit=50');
-        document.getElementById('telemetry-list').innerHTML = data.map(t => `
-          <div class="p-3 bg-gray-50 rounded">
-            <div class="flex justify-between">
-              <span class="font-bold">${t.type}</span>
-              <span class="text-gray-500 text-xs">${new Date(t.timestamp).toLocaleString()}</span>
-            </div>
-            <div class="text-sm text-gray-500">${t.source} | ${t.platform || 'web'}</div>
-            ${t.data ? `<pre class="text-xs text-gray-400 mt-1 overflow-auto max-h-20">${JSON.stringify(t.data, null, 2)}</pre>` : ''}
-          </div>
-        `).join('');
-      } catch (err) {
-        console.error('加载遥测数据失败:', err);
-      }
-    }
+    switchTab('dashboard');
   </script>
 </body>
 </html>

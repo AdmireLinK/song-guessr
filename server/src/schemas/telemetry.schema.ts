@@ -36,6 +36,9 @@ export class Telemetry {
   platform?: string; // 'web' | 'android' | 'windows'
 
   @Prop()
+  ip?: string;
+
+  @Prop()
   appVersion?: string;
 
   @Prop({ default: Date.now })

@@ -7,8 +7,6 @@ import {
   Input,
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
   Dialog,
   DialogContent,
   DialogHeader,
@@ -23,7 +21,8 @@ import { socketService } from '@/lib/socket';
 
 export function LobbyPage() {
   const navigate = useNavigate();
-  const { playerName, roomList, currentRoom, error, setError } = useGameStore();
+  const { playerName, roomList, currentRoom, error, setError, setPlayerName } = useGameStore();
+  const [nameInput, setNameInput] = useState(playerName);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showJoinDialog, setShowJoinDialog] = useState(false);
   const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
@@ -34,21 +33,15 @@ export function LobbyPage() {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    if (!playerName) {
-      navigate('/');
-      return;
-    }
-
-    // 获取房间列表
+    socketService.connect();
     socketService.listRooms();
 
-    // 定时刷新
     const interval = setInterval(() => {
       socketService.listRooms();
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [playerName, navigate]);
+  }, []);
 
   useEffect(() => {
     // 当成功进入房间后导航到房间页面
@@ -65,13 +58,25 @@ export function LobbyPage() {
     }
   }, [error, setError]);
 
+  const ensurePlayerName = () => {
+    const trimmed = nameInput.trim();
+    if (!trimmed) {
+      setError('请输入昵称后再加入/创建房间');
+      return null;
+    }
+    setPlayerName(trimmed);
+    return trimmed;
+  };
+
   const handleCreateRoom = () => {
     if (!roomName.trim()) return;
+    const name = ensurePlayerName();
+    if (!name) return;
     
     setIsLoading(true);
     socketService.createRoom(
       roomName.trim(),
-      playerName,
+      name,
       isPrivate,
       isPrivate ? password : undefined
     );
@@ -84,17 +89,21 @@ export function LobbyPage() {
   };
 
   const handleJoinRoom = (roomId: string, needsPassword: boolean) => {
+    const name = ensurePlayerName();
+    if (!name) return;
     if (needsPassword) {
       setSelectedRoom(roomId);
       setShowJoinDialog(true);
     } else {
-      socketService.joinRoom(roomId, playerName);
+      socketService.joinRoom(roomId, name);
     }
   };
 
   const handleConfirmJoin = () => {
+    const name = ensurePlayerName();
+    if (!name) return;
     if (selectedRoom) {
-      socketService.joinRoom(selectedRoom, playerName, joinPassword);
+      socketService.joinRoom(selectedRoom, name, joinPassword);
       setShowJoinDialog(false);
       setJoinPassword('');
       setSelectedRoom(null);
@@ -115,8 +124,23 @@ export function LobbyPage() {
             返回
           </Button>
           <SketchLogo size="sm" />
-          <div className="font-sketch text-muted-foreground">
-            👤 {playerName}
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="输入昵称后再加入/创建"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              className="w-48 text-sm"
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                const name = ensurePlayerName();
+                if (name) setNameInput(name);
+              }}
+            >
+              保存昵称
+            </Button>
           </div>
         </div>
 

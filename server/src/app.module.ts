@@ -16,7 +16,9 @@ import { MusicService } from './game/music.service';
       isGlobal: true,
       envFilePath: '.env',
     }),
-    MongooseModule.forRoot(process.env.MONGODB_URI || 'mongodb://localhost:27017/song-guessr'),
+    MongooseModule.forRoot(
+      process.env.MONGODB_URI || 'mongodb://localhost:27017/song-guessr',
+    ),
     ScheduleModule.forRoot(),
     // 静态文件服务（用于管理面板和前端）
     ServeStaticModule.forRoot({

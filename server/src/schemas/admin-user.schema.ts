@@ -11,12 +11,6 @@ export class AdminUser {
   @Prop({ required: true })
   passwordHash: string;
 
-  @Prop({ default: 'admin' })
-  role: string; // 'admin' | 'superadmin'
-
-  @Prop({ default: true })
-  isActive: boolean;
-
   @Prop()
   lastLoginAt?: Date;
 

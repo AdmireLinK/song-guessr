@@ -41,11 +41,14 @@ export class PlayerStats {
 
   // 每日统计
   @Prop({ type: Object, default: {} })
-  dailyStats: Record<string, {
-    games: number;
-    wins: number;
-    score: number;
-  }>;
+  dailyStats: Record<
+    string,
+    {
+      games: number;
+      wins: number;
+      score: number;
+    }
+  >;
 }
 
 export const PlayerStatsSchema = SchemaFactory.createForClass(PlayerStats);

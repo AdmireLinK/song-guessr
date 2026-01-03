@@ -9,7 +9,6 @@ import {
   RefreshCw,
   LogOut,
   Trash2,
-  UserMinus,
   Crown,
 } from 'lucide-react';
 import {

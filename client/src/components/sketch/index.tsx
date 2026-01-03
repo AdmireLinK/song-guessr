@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Music, Users, Sparkles } from 'lucide-react';
+import { Music, Sparkles } from 'lucide-react';
 
 export function SketchLogo({ size = 'lg' }: { size?: 'sm' | 'md' | 'lg' }) {
   const sizes = {

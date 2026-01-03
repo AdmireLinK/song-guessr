@@ -7,7 +7,7 @@ export interface RoomInfo {
   hostName: string;
   playerCount: number;
   maxPlayers: number;
-  status: 'waiting' | 'playing' | 'round_end' | 'game_end';
+  status: 'waiting' | 'waiting_submitter' | 'waiting_song' | 'playing' | 'round_end' | 'game_end';
   isPrivate: boolean;
 }
 
@@ -19,6 +19,7 @@ export interface Player {
   isHost: boolean;
   connected: boolean;
   hasSubmittedSong: boolean;
+  hasGuessedCorrectly?: boolean;
 }
 
 export interface RoomSettings {
@@ -41,16 +42,47 @@ export interface LyricSlice {
   lines: LyricLine[];
 }
 
+export interface GameSong {
+  id: string;
+  title: string;
+  artist: string;
+  album?: string;
+  pictureUrl?: string;
+  releaseYear?: number;
+  popularity?: number;
+  language?: string;
+  tags?: string[];
+}
+
+export interface GuessFeedback {
+  releaseYear?: number;
+  releaseYearFeedback?: '↑' | '↓' | '=' | '?';
+  popularity?: number;
+  popularityFeedback?: '↑' | '↓' | '=' | '?';
+  languageMatch?: boolean;
+  metaTags?: {
+    guess: string[];
+    shared: string[];
+  };
+}
+
 export interface GuessResult {
+  id?: string;
   correct: boolean;
   playerName: string;
   guessText: string;
   timestamp: number;
   guessNumber: number;
   remainingGuesses?: number;
+  feedback?: GuessFeedback;
+  guessedSong?: Pick<
+    GameSong,
+    'id' | 'title' | 'artist' | 'pictureUrl' | 'releaseYear' | 'popularity' | 'language'
+  >;
 }
 
 export interface ChatMessage {
+  id?: string;
   playerName: string;
   message: string;
   timestamp: number;
@@ -66,7 +98,7 @@ export interface RoundData {
 }
 
 export interface RoundEndData {
-  song: { title: string; artist: string; pictureUrl: string };
+  song: { title: string; artist: string; pictureUrl?: string };
   correctGuessers: string[];
   scores: { name: string; score: number; correctGuesses: number; totalGuesses: number }[];
 }
@@ -76,41 +108,36 @@ export interface GameEndData {
   winner: string;
 }
 
-type GameStatus = 'idle' | 'waiting_songs' | 'playing' | 'round_end' | 'game_end';
+type GameStatus =
+  | 'idle'
+  | 'waiting_submitter'
+  | 'waiting_song'
+  | 'waiting_songs'
+  | 'playing'
+  | 'round_end'
+  | 'game_end';
 type PageType = 'home' | 'lobby' | 'room';
 
 interface GameState {
-  // 页面状态
   currentPage: PageType;
-
-  // 连接状态
   connected: boolean;
   error: string | null;
-
-  // 玩家信息
   playerName: string;
-  
-  // 房间列表
   roomList: RoomInfo[];
-  
-  // 当前房间
   currentRoom: RoomInfo | null;
   players: Player[];
   settings: RoomSettings;
   isHost: boolean;
-  
-  // 游戏状态
   gameStatus: GameStatus;
   playersNeedingSongs: string[];
+  pendingSubmitterName: string | null;
+  revealedAnswer: Pick<GameSong, 'id' | 'title' | 'artist' | 'album' | 'pictureUrl' | 'releaseYear' | 'popularity' | 'language' | 'tags'> | null;
+  spectatorGuesses: GuessResult[];
   currentRound: RoundData | null;
   myGuesses: GuessResult[];
   roundEndData: RoundEndData | null;
   gameEndData: GameEndData | null;
-  
-  // 聊天
   chatMessages: ChatMessage[];
-  
-  // Actions
   setCurrentPage: (page: PageType) => void;
   setConnected: (connected: boolean) => void;
   setError: (error: string | null) => void;
@@ -124,18 +151,18 @@ interface GameState {
   updatePlayerReady: (playerName: string, isReady: boolean) => void;
   updateHost: (newHostName: string) => void;
   leaveRoom: () => void;
-  
-  // 游戏相关
   setGameStatus: (status: GameStatus) => void;
   setPlayersNeedingSongs: (players: string[]) => void;
+  setPendingSubmitterName: (name: string | null) => void;
+  setRevealedAnswer: (song: GameState['revealedAnswer']) => void;
+  addSpectatorGuess: (guess: GuessResult) => void;
+  clearSpectatorGuesses: () => void;
   playerSubmittedSong: (playerName: string) => void;
   startRound: (data: RoundData) => void;
   addGuessResult: (result: GuessResult) => void;
   playerGuessed: (playerName: string, correct: boolean) => void;
   endRound: (data: RoundEndData) => void;
   endGame: (data: GameEndData) => void;
-  
-  // 聊天
   addChatMessage: (message: ChatMessage) => void;
   clearChat: () => void;
 }
@@ -150,7 +177,7 @@ const DEFAULT_SETTINGS: RoomSettings = {
 
 export const useGameStore = create<GameState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       // 初始状态
       currentPage: 'home',
       connected: false,
@@ -163,6 +190,9 @@ export const useGameStore = create<GameState>()(
       isHost: false,
       gameStatus: 'idle',
       playersNeedingSongs: [],
+      pendingSubmitterName: null,
+      revealedAnswer: null,
+      spectatorGuesses: [],
       currentRound: null,
       myGuesses: [],
       roundEndData: null,
@@ -241,6 +271,16 @@ export const useGameStore = create<GameState>()(
         playersNeedingSongs: players,
         gameStatus: players.length > 0 ? 'waiting_songs' : 'playing',
       }),
+
+      setPendingSubmitterName: (name) => set({ pendingSubmitterName: name }),
+
+      setRevealedAnswer: (song) => set({ revealedAnswer: song }),
+
+      addSpectatorGuess: (guess) => set((state) => ({
+        spectatorGuesses: [...state.spectatorGuesses, guess],
+      })),
+
+      clearSpectatorGuesses: () => set({ spectatorGuesses: [] }),
       
       playerSubmittedSong: (playerName) => set((state) => ({
         playersNeedingSongs: state.playersNeedingSongs.filter((n) => n !== playerName),
@@ -253,6 +293,7 @@ export const useGameStore = create<GameState>()(
         currentRound: data,
         gameStatus: 'playing',
         myGuesses: [],
+        spectatorGuesses: [],
         roundEndData: null,
       }),
       
@@ -260,9 +301,13 @@ export const useGameStore = create<GameState>()(
         myGuesses: [...state.myGuesses, result],
       })),
       
-      playerGuessed: (playerName, correct) => {
-        // 可以添加额外的状态更新，比如显示其他玩家的猜测动画
-      },
+      playerGuessed: (playerName, correct) => set((state) => ({
+        players: state.players.map((p) =>
+          p.name === playerName
+            ? { ...p, hasGuessedCorrectly: correct ? true : (p.hasGuessedCorrectly ?? false) }
+            : p
+        ),
+      })),
       
       endRound: (data) => set((state) => ({
         gameStatus: 'round_end',

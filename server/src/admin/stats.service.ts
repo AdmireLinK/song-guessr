@@ -3,16 +3,134 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Telemetry, TelemetryDocument } from '../schemas/telemetry.schema';
 import { GameStats, GameStatsDocument } from '../schemas/game-stats.schema';
-import { PlayerStats, PlayerStatsDocument } from '../schemas/player-stats.schema';
+import {
+  PlayerStats,
+  PlayerStatsDocument,
+} from '../schemas/player-stats.schema';
+import { SongStats, SongStatsDocument } from '../schemas/song-stats.schema';
+import { ActionLog, ActionLogDocument } from '../schemas/action-log.schema';
 import { Room, PlayerScore } from '../game/game.types';
 
 @Injectable()
 export class StatsService {
   constructor(
-    @InjectModel(Telemetry.name) private telemetryModel: Model<TelemetryDocument>,
-    @InjectModel(GameStats.name) private gameStatsModel: Model<GameStatsDocument>,
-    @InjectModel(PlayerStats.name) private playerStatsModel: Model<PlayerStatsDocument>,
+    @InjectModel(Telemetry.name)
+    private telemetryModel: Model<TelemetryDocument>,
+    @InjectModel(GameStats.name)
+    private gameStatsModel: Model<GameStatsDocument>,
+    @InjectModel(PlayerStats.name)
+    private playerStatsModel: Model<PlayerStatsDocument>,
+    @InjectModel(SongStats.name)
+    private songStatsModel: Model<SongStatsDocument>,
+    @InjectModel(ActionLog.name)
+    private actionLogModel: Model<ActionLogDocument>,
   ) {}
+
+  // 记录音乐请求详情
+  async recordMusicRequest(data: {
+    songId?: string;
+    title?: string;
+    artist?: string;
+    server?: 'netease' | 'qq';
+    language?: string;
+    detail?: Record<string, any>;
+    playerName?: string;
+    ip?: string;
+  }) {
+    const log = new this.actionLogModel({
+      type: 'music_request',
+      ...data,
+      timestamp: new Date(),
+    });
+    await log.save();
+  }
+
+  // 记录提交歌曲
+  async recordSongSubmit(data: {
+    songId?: string;
+    title: string;
+    artist: string;
+    server: 'netease' | 'qq';
+    pictureUrl?: string;
+    language?: string;
+    playerName: string;
+    ip?: string;
+  }) {
+    await this.songStatsModel.updateOne(
+      { songId: data.songId || data.title, server: data.server },
+      {
+        $setOnInsert: {
+          pictureUrl: data.pictureUrl,
+        },
+        $set: {
+          title: data.title,
+          artist: data.artist,
+          language: data.language,
+        },
+        $inc: { timesAsQuestion: 1 },
+      },
+      { upsert: true },
+    );
+
+    await this.actionLogModel.create({
+      type: 'submit',
+      songId: data.songId,
+      title: data.title,
+      artist: data.artist,
+      server: data.server,
+      language: data.language,
+      playerName: data.playerName,
+      ip: data.ip,
+      timestamp: new Date(),
+    });
+  }
+
+  // 记录猜歌
+  async recordSongGuess(data: {
+    songId?: string;
+    title: string;
+    artist: string;
+    server: 'netease' | 'qq';
+    language?: string;
+    correct: boolean;
+    playerName: string;
+    ip?: string;
+    popularity?: number;
+    releaseYear?: number;
+  }) {
+    await this.songStatsModel.updateOne(
+      { songId: data.songId || data.title, server: data.server },
+      {
+        $set: {
+          title: data.title,
+          artist: data.artist,
+          language: data.language,
+        },
+        $inc: {
+          timesGuessed: 1,
+          timesGuessedCorrectly: data.correct ? 1 : 0,
+        },
+      },
+      { upsert: true },
+    );
+
+    await this.actionLogModel.create({
+      type: 'guess',
+      songId: data.songId,
+      title: data.title,
+      artist: data.artist,
+      server: data.server,
+      language: data.language,
+      playerName: data.playerName,
+      ip: data.ip,
+      correct: data.correct,
+      timestamp: new Date(),
+      detail: {
+        popularity: data.popularity,
+        releaseYear: data.releaseYear,
+      },
+    });
+  }
 
   // 记录遥测数据
   async recordTelemetry(data: {
@@ -27,6 +145,7 @@ export class StatsService {
     userAgent?: string;
     platform?: string;
     appVersion?: string;
+    ip?: string;
   }): Promise<Telemetry> {
     const telemetry = new this.telemetryModel({
       ...data,
@@ -46,6 +165,7 @@ export class StatsService {
     userId?: string;
     sessionId?: string;
     additionalData?: Record<string, any>;
+    ip?: string;
   }): Promise<Telemetry> {
     return this.recordTelemetry({
       type: 'error',
@@ -63,6 +183,7 @@ export class StatsService {
     method?: string;
     statusCode?: number;
     additionalData?: Record<string, any>;
+    ip?: string;
   }): Promise<Telemetry> {
     return this.recordTelemetry({
       type: 'error',
@@ -106,7 +227,11 @@ export class StatsService {
   }
 
   // 记录游戏结束
-  async recordGameEnd(room: Room, finalScores: PlayerScore[], winner: string): Promise<void> {
+  async recordGameEnd(
+    room: Room,
+    finalScores: PlayerScore[],
+    winner: string,
+  ): Promise<void> {
     const endTime = new Date();
 
     // 更新游戏统计
@@ -115,9 +240,12 @@ export class StatsService {
       {
         $set: {
           endTime,
-          duration: room.roundHistory.length > 0 
-            ? Math.floor((endTime.getTime() - room.roundHistory[0].startTime) / 1000)
-            : 0,
+          duration:
+            room.roundHistory.length > 0
+              ? Math.floor(
+                  (endTime.getTime() - room.roundHistory[0].startTime) / 1000,
+                )
+              : 0,
           roundCount: room.roundHistory.length,
           completed: true,
           players: finalScores.map((s) => ({
@@ -125,9 +253,12 @@ export class StatsService {
             score: s.score,
             correctGuesses: s.correctGuesses,
             totalGuesses: s.totalGuesses,
-            songsSubmitted: room.players.get(
-              Array.from(room.players.entries()).find(([_, p]) => p.name === s.name)?.[0] || ''
-            )?.songsSubmitted || 0,
+            songsSubmitted:
+              room.players.get(
+                Array.from(room.players.entries()).find(
+                  ([_, p]) => p.name === s.name,
+                )?.[0] || '',
+              )?.songsSubmitted || 0,
           })),
           rounds: room.roundHistory.map((r, i) => ({
             roundNumber: i + 1,
@@ -135,7 +266,9 @@ export class StatsService {
             songArtist: r.song?.artist || '',
             submittedBy: r.submitterName,
             correctGuessers: r.correctGuessers,
-            duration: r.endTime ? Math.floor((r.endTime - r.startTime) / 1000) : 0,
+            duration: r.endTime
+              ? Math.floor((r.endTime - r.startTime) / 1000)
+              : 0,
           })),
         },
       },
@@ -145,7 +278,9 @@ export class StatsService {
     const today = new Date().toISOString().split('T')[0];
     for (const score of finalScores) {
       const isWinner = score.name === winner;
-      const player = Array.from(room.players.values()).find((p) => p.name === score.name);
+      const player = Array.from(room.players.values()).find(
+        (p) => p.name === score.name,
+      );
 
       await this.playerStatsModel.updateOne(
         { playerName: score.name },
@@ -290,11 +425,7 @@ export class StatsService {
         .sort({ startTime: -1 })
         .limit(5)
         .exec(),
-      this.playerStatsModel
-        .find()
-        .sort({ totalScore: -1 })
-        .limit(5)
-        .exec(),
+      this.playerStatsModel.find().sort({ totalScore: -1 }).limit(5).exec(),
     ]);
 
     return {
@@ -338,6 +469,95 @@ export class StatsService {
       clientErrors,
       serverErrors,
       recentErrors,
+    };
+  }
+
+  async getActivity(rangeDays = 7): Promise<{
+    rangeDays: number;
+    activeIpCount: number;
+    guessCount: number;
+    errorCount: number;
+    series: Array<{
+      date: string;
+      guesses: number;
+      errors: number;
+      activeIps: number;
+    }>;
+  }> {
+    const since = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000);
+
+    const [activeIpsRaw, guessCount, errorCount, guessSeries, errorSeries] =
+      await Promise.all([
+        this.actionLogModel.distinct('ip', { timestamp: { $gte: since } }),
+        this.actionLogModel.countDocuments({
+          type: 'guess',
+          timestamp: { $gte: since },
+        }),
+        this.telemetryModel.countDocuments({
+          type: 'error',
+          timestamp: { $gte: since },
+        }),
+        this.actionLogModel.aggregate([
+          { $match: { type: 'guess', timestamp: { $gte: since } } },
+          {
+            $group: {
+              _id: {
+                $dateToString: { format: '%Y-%m-%d', date: '$timestamp' },
+              },
+              count: { $sum: 1 },
+              ips: { $addToSet: '$ip' },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ]),
+        this.telemetryModel.aggregate([
+          { $match: { type: 'error', timestamp: { $gte: since } } },
+          {
+            $group: {
+              _id: {
+                $dateToString: { format: '%Y-%m-%d', date: '$timestamp' },
+              },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ]),
+      ]);
+
+    const map = new Map<
+      string,
+      { guesses: number; errors: number; activeIps: Set<string> }
+    >();
+    for (const g of guessSeries) {
+      map.set(g._id, {
+        guesses: g.count,
+        errors: 0,
+        activeIps: new Set(g.ips.filter(Boolean)),
+      });
+    }
+    for (const e of errorSeries) {
+      const entry = map.get(e._id) || {
+        guesses: 0,
+        errors: 0,
+        activeIps: new Set<string>(),
+      };
+      entry.errors = e.count;
+      map.set(e._id, entry);
+    }
+
+    const series = Array.from(map.entries()).map(([date, value]) => ({
+      date,
+      guesses: value.guesses,
+      errors: value.errors,
+      activeIps: value.activeIps.size,
+    }));
+
+    return {
+      rangeDays,
+      activeIpCount: activeIpsRaw.filter(Boolean).length,
+      guessCount,
+      errorCount,
+      series,
     };
   }
 }

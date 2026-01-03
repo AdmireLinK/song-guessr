@@ -35,7 +35,15 @@ export class AdminController {
     @Req() req: Request,
   ) {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    return this.adminAuthService.login(body.username, body.password, ip);
+    const res = await this.adminAuthService.login(
+      body.username,
+      body.password,
+      ip,
+    );
+    return {
+      ...res,
+      admin: { username: res.username },
+    };
   }
 
   // 修改密码
@@ -155,8 +163,12 @@ export class AdminController {
       sessionId?: string;
       additionalData?: Record<string, any>;
     },
+    @Req() req: Request,
   ) {
-    await this.statsService.recordClientError(body);
+    await this.statsService.recordClientError({
+      ...body,
+      ip: req.ip || req.socket.remoteAddress,
+    });
     return { success: true };
   }
 
@@ -173,10 +185,57 @@ export class AdminController {
       appVersion?: string;
     },
   ) {
-    await this.statsService.recordTelemetry({
-      ...body,
-      source: 'client',
-    });
+    // 仅保留错误类遥测
+    if (body.type === 'error') {
+      await this.statsService.recordTelemetry({
+        ...body,
+        source: 'client',
+      });
+    }
     return { success: true };
+  }
+
+  // 活跃与错误/猜测统计
+  @Get('activity')
+  @UseGuards(AdminGuard)
+  async getActivity(@Query('range') range?: string) {
+    const days = range ? parseInt(range, 10) : 7;
+    return this.statsService.getActivity(isNaN(days) ? 7 : days);
+  }
+
+  // 管理员踢人
+  @Post('rooms/:roomId/kick')
+  @UseGuards(AdminGuard)
+  async adminKick(
+    @Param('roomId') roomId: string,
+    @Body() body: { playerName: string },
+  ) {
+    const success = this.gameGateway.adminKickPlayer(roomId, body.playerName);
+    return { success };
+  }
+
+  // 管理员转移房主
+  @Post('rooms/:roomId/transfer-host')
+  @UseGuards(AdminGuard)
+  async adminTransferHost(
+    @Param('roomId') roomId: string,
+    @Body() body: { playerName: string },
+  ) {
+    const success = this.gameGateway.adminTransferHost(roomId, body.playerName);
+    return { success };
+  }
+
+  // 置顶出题人提交曲目（下一轮优先）
+  @Post('rooms/:roomId/assign-submitter')
+  @UseGuards(AdminGuard)
+  async adminAssignSubmitter(
+    @Param('roomId') roomId: string,
+    @Body() body: { playerName: string },
+  ) {
+    const success = this.gameGateway.adminPrioritizeSubmitter(
+      roomId,
+      body.playerName,
+    );
+    return { success };
   }
 }

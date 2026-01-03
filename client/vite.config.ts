@@ -27,7 +27,7 @@ export default defineConfig(({ mode }) => {
             proxy.on('error', (err, _req, _res) => {
               console.log('[Proxy Error] /api:', err.message)
             })
-            proxy.on('proxyReq', (proxyReq, req, _res) => {
+            proxy.on('proxyReq', (_proxyReq, req, _res) => {
               console.log('[Proxy] ->', req.method, req.url)
             })
           },

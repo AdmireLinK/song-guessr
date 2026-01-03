@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
-  Crown,
   Check,
   X,
   Settings,
@@ -25,21 +24,19 @@ import {
   Dialog,
   DialogContent,
   DialogHeader,
-  DialogTitle,
-  DialogFooter,
   Label,
   Slider,
   Switch,
   Progress,
   ScrollArea,
+  DialogTitle,
 } from '@/components/ui';
-import { SketchDivider, LoadingSpinner, PlayerAvatar } from '@/components/sketch';
+import { LoadingSpinner, PlayerAvatar } from '@/components/sketch';
 import { useGameStore } from '@/store/game-store';
 import { socketService } from '@/lib/socket';
 
 export function RoomPage() {
   const navigate = useNavigate();
-  const { roomId } = useParams<{ roomId: string }>();
   const {
     playerName,
     currentRoom,
@@ -48,6 +45,9 @@ export function RoomPage() {
     isHost,
     gameStatus,
     playersNeedingSongs,
+    pendingSubmitterName,
+    revealedAnswer,
+    spectatorGuesses,
     currentRound,
     myGuesses,
     roundEndData,
@@ -59,11 +59,11 @@ export function RoomPage() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [showSongSearch, setShowSongSearch] = useState(false);
+  const [songSelectionMode, setSongSelectionMode] = useState<'submit' | 'guess' | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [selectedServer, setSelectedServer] = useState<'netease' | 'qq'>('netease');
-  const [guessText, setGuessText] = useState('');
   const [chatText, setChatText] = useState('');
   const [isMuted, setIsMuted] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
@@ -160,22 +160,25 @@ export function RoomPage() {
       return;
     }
 
-    console.log('[Room] submitting song', { song: { name: song.name, artist: song.artist }, server: selectedServer });
-    // Pass name and artist to backend for re-search
-    socketService.submitSong({
-      name: song.name,
-      artist: song.artist,
-      server: selectedServer
-    });
+    if (songSelectionMode === 'guess') {
+      socketService.guess({
+        songId: song.id,
+        server: selectedServer,
+        title: song.name,
+        artist: song.artist,
+      });
+    } else {
+      socketService.submitSong({
+        name: song.name,
+        artist: song.artist,
+        server: selectedServer,
+      });
+    }
+
     setShowSongSearch(false);
+    setSongSelectionMode(null);
     setSearchQuery('');
     setSearchResults([]);
-  };
-
-  const handleGuess = () => {
-    if (!guessText.trim()) return;
-    socketService.guess(guessText.trim());
-    setGuessText('');
   };
 
   const handleSendChat = () => {
@@ -195,6 +198,51 @@ export function RoomPage() {
   const me = players.find((p) => p.name === playerName);
   const allReady = players.every((p) => p.isReady);
   const needToSubmitSong = playersNeedingSongs.includes(playerName);
+  const amSubmitter = (currentRound?.submitterName || pendingSubmitterName) === playerName;
+  const iGuessedCorrectly = myGuesses.some((g) => g.correct);
+  const amSpectator = amSubmitter || iGuessedCorrectly;
+
+  const formatGuessFeedback = (guess: any) => {
+    const fb = guess?.feedback;
+    if (!fb) return null;
+
+    const year = fb.releaseYearFeedback ? `${fb.releaseYearFeedback} ${fb.releaseYear ?? ''}`.trim() : null;
+    const pop = fb.popularityFeedback ? `${fb.popularityFeedback} ${fb.popularity ?? ''}`.trim() : null;
+    const tags: string[] = fb.metaTags?.guess || [];
+    const sharedSet = new Set((fb.metaTags?.shared || []).map((t: string) => t.toLowerCase()));
+
+    return (
+      <div className="text-xs text-muted-foreground space-y-1 mt-1">
+        <div className="flex gap-3 flex-wrap">
+          {year && <span>年份: <span className="font-semibold text-foreground">{year}</span></span>}
+          {pop && <span>人气: <span className="font-semibold text-foreground">{pop}</span></span>}
+          {fb.languageMatch !== undefined && (
+            <span>语言: <span className={fb.languageMatch ? 'text-green-700 font-semibold' : 'text-muted-foreground'}>{fb.languageMatch ? '匹配' : '不匹配'}</span></span>
+          )}
+        </div>
+        {tags.length > 0 && (
+          <div className="flex gap-1 flex-wrap">
+            {tags.slice(0, 18).map((t: string, idx: number) => {
+              const isShared = sharedSet.has(t.toLowerCase());
+              return (
+                <span
+                  key={`${t}-${idx}`}
+                  className={
+                    `px-1.5 py-0.5 rounded border text-[11px] ` +
+                    (isShared
+                      ? 'bg-green-50 border-green-200 text-green-700'
+                      : 'bg-muted/40 border-muted text-muted-foreground')
+                  }
+                >
+                  {t}
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen paper-texture p-4">
@@ -333,6 +381,68 @@ export function RoomPage() {
               </Card>
             )}
 
+            {gameStatus === 'waiting_submitter' && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>🧑‍🎤 选择出题人</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-center py-6 space-y-4">
+                    <p className="text-muted-foreground font-sketch">
+                      {isHost ? '请选择本轮出题人（他/她将提交一首歌供大家猜）' : '等待房主选择出题人...'}
+                    </p>
+                    {isHost && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-xl mx-auto">
+                        {players.map((p) => (
+                          <Button
+                            key={`submitter-${p.name}`}
+                            variant={p.name === playerName ? 'secondary' : 'default'}
+                            onClick={() => socketService.chooseSubmitter(p.name)}
+                          >
+                            {p.name}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {gameStatus === 'waiting_song' && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>🎵 等待出题</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-center py-6 space-y-4">
+                    <p className="text-muted-foreground font-sketch">
+                      本轮出题人：<span className="font-semibold text-foreground">{pendingSubmitterName || '（未选择）'}</span>
+                    </p>
+                    {amSubmitter ? (
+                      <>
+                        <p className="text-muted-foreground font-sketch">
+                          你是出题人，搜索并提交一首歌曲！
+                        </p>
+                        <Button onClick={() => { setSongSelectionMode('submit'); setShowSongSearch(true); }} size="lg">
+                          <Search className="w-4 h-4 mr-2" />
+                          搜索歌曲
+                        </Button>
+                      </>
+                    ) : (
+                      <motion.div
+                        animate={{ scale: [1, 1.08, 1] }}
+                        transition={{ duration: 1, repeat: Infinity }}
+                        className="text-4xl"
+                      >
+                        ⏳
+                      </motion.div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             {gameStatus === 'playing' && currentRound && (
               <Card>
                 <CardHeader>
@@ -367,7 +477,7 @@ export function RoomPage() {
                     <div className="space-y-2 text-center">
                       {currentRound.lyricSlice.lines.map((line, i) => (
                         <motion.p
-                          key={`lyric-${currentRound.roundNumber}-${i}-${(line.startTime||0)}`}
+                          key={`lyric-${currentRound.roundNumber}-${i}-${line.time}`}
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ delay: i * 0.2 }}
@@ -379,48 +489,26 @@ export function RoomPage() {
                     </div>
                   </div>
 
-                  {/* 猜测输入 */}
+                  {/* 猜测选择 */}
                   {currentRound.submitterName !== playerName && (
                     <div className="flex gap-2">
-                      <Input
-                        placeholder="输入歌曲名..."
-                        value={guessText}
-                        onChange={(e) => setGuessText(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleGuess()}
-                        disabled={myGuesses.some((g) => g.correct) || myGuesses.length >= settings.maxGuessesPerRound}
-                      />
                       <Button
-                        onClick={handleGuess}
-                        disabled={!guessText.trim() || myGuesses.some((g) => g.correct) || myGuesses.length >= settings.maxGuessesPerRound}
+                        onClick={() => { setSongSelectionMode('guess'); setShowSongSearch(true); }}
+                        disabled={myGuesses.some((g) => g.correct) || myGuesses.length >= settings.maxGuessesPerRound}
                       >
-                        猜！
+                        选择歌曲来猜
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={handleSkipRound}
+                        disabled={myGuesses.some((g) => g.correct) || myGuesses.length >= settings.maxGuessesPerRound}
+                      >
+                        跳过本轮
                       </Button>
                     </div>
                   )}
 
-                  {/* 我的猜测记录 */}
-                  {myGuesses.length > 0 && (
-                    <div className="mt-4 space-y-2">
-                      <p className="text-sm text-muted-foreground">你的猜测：</p>
-                      {myGuesses.map((guess, i) => (
-                        <div
-                          key={guess.id ?? `guess-${i}-${guess.guessText.slice(0,20)}`}
-                          className={`text-sm p-2 rounded ${
-                            guess.correct
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-red-100 text-red-700'
-                          }`}
-                        >
-                          {guess.correct ? '✅' : '❌'} {guess.guessText}
-                        </div>
-                      ))}
-                      {!myGuesses.some((g) => g.correct) && (
-                        <p className="text-xs text-muted-foreground">
-                          剩余猜测次数: {settings.maxGuessesPerRound - myGuesses.length}
-                        </p>
-                      )}
-                    </div>
-                  )}
+                  {/* 猜测记录已移动到右侧玩家列表下方 */}
                 </CardContent>
               </Card>
             )}
@@ -520,8 +608,11 @@ export function RoomPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {player.hasSubmittedSong && gameStatus === 'waiting_songs' && (
-                          <span className="text-green-500">🎵</span>
+                        {(currentRound?.submitterName === player.name || pendingSubmitterName === player.name) && (
+                          <span className="text-blue-600 text-sm">🎤 出题</span>
+                        )}
+                        {player.hasGuessedCorrectly && gameStatus === 'playing' && (
+                          <span className="text-green-600 text-sm">✅ 已猜对</span>
                         )}
                         {player.isReady && gameStatus === 'idle' && (
                           <span className="text-green-500 text-sm">✓ 准备</span>
@@ -532,6 +623,109 @@ export function RoomPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* 答案详情（出题人/已猜对玩家） */}
+            {revealedAnswer && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">🎯 答案</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-3">
+                    {revealedAnswer.pictureUrl && (
+                      <img
+                        src={revealedAnswer.pictureUrl}
+                        alt="cover"
+                        className="w-16 h-16 rounded-lg border-2 border-sketch-ink"
+                      />
+                    )}
+                    <div className="min-w-0">
+                      <div className="font-hand text-lg truncate">{revealedAnswer.title}</div>
+                      <div className="text-sm text-muted-foreground truncate">{revealedAnswer.artist}{revealedAnswer.album ? ` · ${revealedAnswer.album}` : ''}</div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {revealedAnswer.releaseYear ? `年份 ${revealedAnswer.releaseYear}` : ''}
+                        {revealedAnswer.releaseYear && revealedAnswer.popularity !== undefined ? ' · ' : ''}
+                        {revealedAnswer.popularity !== undefined ? `人气 ${revealedAnswer.popularity}` : ''}
+                      </div>
+                      {Array.isArray(revealedAnswer.tags) && revealedAnswer.tags.length > 0 && (
+                        <div className="flex gap-1 flex-wrap mt-2">
+                          {revealedAnswer.tags.slice(0, 12).map((t, idx) => (
+                            <span key={`${t}-${idx}`} className="px-1.5 py-0.5 rounded border bg-muted/40 text-[11px] text-muted-foreground">
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* 猜测历史（放在玩家列表下方） */}
+            {(gameStatus === 'playing' || myGuesses.length > 0 || (amSpectator && spectatorGuesses.length > 0)) && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">🧾 猜测记录</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div>
+                      <div className="text-sm text-muted-foreground mb-2">你的猜测</div>
+                      {myGuesses.length === 0 ? (
+                        <div className="text-xs text-muted-foreground">暂无</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {myGuesses.map((guess, i) => (
+                            <div
+                              key={guess.id ?? `my-guess-${i}-${guess.guessText.slice(0, 20)}`}
+                              className={`text-sm p-2 rounded border ${
+                                guess.correct
+                                  ? 'bg-green-50 text-green-700 border-green-200'
+                                  : 'bg-muted/40 text-foreground border-muted'
+                              }`}
+                            >
+                              <div className="font-semibold">{guess.correct ? '✅' : '❌'} {guess.guessText}</div>
+                              {formatGuessFeedback(guess)}
+                            </div>
+                          ))}
+                          {!iGuessedCorrectly && gameStatus === 'playing' && (
+                            <p className="text-xs text-muted-foreground">
+                              剩余猜测次数: {settings.maxGuessesPerRound - myGuesses.length}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {amSpectator && (
+                      <div>
+                        <div className="text-sm text-muted-foreground mb-2">其他玩家</div>
+                        {spectatorGuesses.length === 0 ? (
+                          <div className="text-xs text-muted-foreground">暂无</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {spectatorGuesses.slice(-20).map((guess, i) => (
+                              <div
+                                key={`sp-guess-${guess.playerName}-${guess.timestamp}-${i}`}
+                                className={`text-sm p-2 rounded border ${
+                                  guess.correct
+                                    ? 'bg-green-50 text-green-700 border-green-200'
+                                    : 'bg-muted/40 text-foreground border-muted'
+                                }`}
+                              >
+                                <div className="font-semibold">{guess.correct ? '✅' : '❌'} {guess.playerName}: {guess.guessText}</div>
+                                {formatGuessFeedback(guess)}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* 聊天 */}
             <Card>
@@ -616,10 +810,18 @@ export function RoomPage() {
       </Dialog>
 
       {/* 搜索歌曲对话框 */}
-      <Dialog open={showSongSearch} onOpenChange={setShowSongSearch}>
+      <Dialog
+        open={showSongSearch}
+        onOpenChange={(open) => {
+          setShowSongSearch(open);
+          if (!open) setSongSelectionMode(null);
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>🔍 搜索歌曲</DialogTitle>
+            <DialogTitle>
+              {songSelectionMode === 'guess' ? '🔍 选择要猜的歌曲' : '🔍 选择要提交的歌曲'}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="flex gap-2">

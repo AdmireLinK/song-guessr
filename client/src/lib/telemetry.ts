@@ -109,30 +109,9 @@ class TelemetryService {
     }
   }
 
-  async trackEvent(eventType: string, data?: Record<string, any>) {
-    if (!this.enabled) return;
-    
-    try {
-      const payload = {
-        type: eventType,
-        data,
-        userId: this.userId,
-        sessionId: this.sessionId,
-        platform: this.platform,
-        appVersion: this.appVersion,
-      };
-
-      await fetch(`${this.apiBase}/api/admin/telemetry`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-    } catch (error) {
-      // 静默处理，避免在后端未启动时刷屏报错
-      if (import.meta.env.DEV) {
-        console.debug('[Telemetry] Failed to track event (backend may be offline):', error);
-      }
-    }
+  async trackEvent(_eventType: string, _data?: Record<string, any>) {
+    // 仅保留错误上报，事件遥测不再发送
+    return;
   }
 }
 

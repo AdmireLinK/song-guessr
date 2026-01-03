@@ -140,7 +140,31 @@ class SocketService {
 
     // 游戏事件
     this.socket.on('game:started', () => {
-      store.setGameStatus('waiting_songs');
+      // 新主玩法：等待房主选择出题人
+      store.setGameStatus('waiting_submitter');
+    });
+
+    this.socket.on('game:needSubmitter', ({ roundNumber }) => {
+      void roundNumber;
+      store.setPendingSubmitterName(null);
+      store.setRevealedAnswer(null);
+      store.clearSpectatorGuesses();
+      store.setGameStatus('waiting_submitter');
+    });
+
+    this.socket.on('game:submitterSelected', ({ submitterName }) => {
+      store.setPendingSubmitterName(submitterName);
+      // 进入等待出题阶段：只有出题人会打开出题弹窗
+      store.setGameStatus('waiting_song');
+    });
+
+    this.socket.on('game:answerReveal', ({ song }) => {
+      store.setRevealedAnswer(song);
+    });
+
+    this.socket.on('game:spectatorGuess', ({ playerName, guess }) => {
+      void playerName;
+      store.addSpectatorGuess(guess);
     });
 
     this.socket.on('game:waitingForSongs', ({ playersNeeded }) => {
@@ -224,6 +248,10 @@ class SocketService {
     this.socket?.emit('game:start');
   }
 
+  chooseSubmitter(playerName: string) {
+    this.socket?.emit('game:chooseSubmitter', { playerName });
+  }
+
   submitSong(data: { name: string; artist: string; server: 'netease' | 'qq' } | string, server?: 'netease' | 'qq') {
     // Support both old (songId, server) and new (data object) signatures
     let payload: any;
@@ -235,8 +263,8 @@ class SocketService {
     this.socket?.emit('game:submitSong', payload);
   }
 
-  guess(text: string) {
-    this.socket?.emit('game:guess', { guess: text });
+  guess(selection: { songId: string; server: 'netease' | 'qq'; title?: string; artist?: string }) {
+    this.socket?.emit('game:guess', selection);
   }
 
   skipRound() {

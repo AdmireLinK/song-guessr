@@ -4,16 +4,16 @@ async function testNeteaseNewAPI() {
   console.log('=== 测试网易云音乐新API ===\n');
 
   const testSongId = '2149887904';
-  
+
   try {
     console.log(`测试歌曲ID: ${testSongId}`);
     console.log('正在调用网易云音乐新API...\n');
-    
+
     const result = await getMusicDetailWithLikes('netease', testSongId);
-    
+
     console.log('完整信息:');
     console.log(JSON.stringify(result, null, 2));
-    
+
     if (result.detail) {
       console.log('\n详细信息:');
       if (result.detail.date) {
