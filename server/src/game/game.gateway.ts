@@ -27,10 +27,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   server: Server;
 
   private readonly logger = new Logger(GameGateway.name);
-  private roundTimers = new Map<string, NodeJS.Timeout>();
+  private guessTimers = new Map<string, Map<string, NodeJS.Timeout>>();
 
   private getPlayerName(client: Socket): string {
-    const raw = (client.data as { playerName?: unknown } | undefined)?.playerName;
+    const raw = (client.data as { playerName?: unknown } | undefined)
+      ?.playerName;
     return typeof raw === 'string' ? raw : '';
   }
 
@@ -39,6 +40,119 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly musicService: MusicService,
     private readonly statsService: StatsService,
   ) {}
+
+  private clearGuessTimer(roomId: string, playerId: string) {
+    const roomTimers = this.guessTimers.get(roomId);
+    const timer = roomTimers?.get(playerId);
+    if (timer) clearTimeout(timer);
+    roomTimers?.delete(playerId);
+    if (roomTimers && roomTimers.size === 0) this.guessTimers.delete(roomId);
+  }
+
+  private clearAllGuessTimers(roomId: string) {
+    const roomTimers = this.guessTimers.get(roomId);
+    if (!roomTimers) return;
+    for (const t of roomTimers.values()) clearTimeout(t);
+    this.guessTimers.delete(roomId);
+  }
+
+  private scheduleGuessTimer(roomId: string, playerId: string) {
+    const room = this.roomService.getRoom(roomId);
+    if (!room || room.status !== 'playing' || !room.currentRound?.isActive)
+      return;
+
+    const player = room.players.get(playerId);
+    if (!player || !player.connected) return;
+    if (player.isSpectator) return;
+    if (player.name === room.currentRound.submitterName) return;
+    if (player.hasGuessedCorrectly) {
+      this.clearGuessTimer(roomId, playerId);
+      return;
+    }
+    if (player.guessesThisRound >= room.settings.maxGuessesPerRound) {
+      this.clearGuessTimer(roomId, playerId);
+      return;
+    }
+
+    this.clearGuessTimer(roomId, playerId);
+    const timer = setTimeout(() => {
+      this.handleGuessTimeout(roomId, playerId);
+    }, room.settings.roundDuration * 1000);
+
+    const roomTimers =
+      this.guessTimers.get(roomId) || new Map<string, NodeJS.Timeout>();
+    roomTimers.set(playerId, timer);
+    this.guessTimers.set(roomId, roomTimers);
+  }
+
+  private countConnectedGuessers(roomId: string): number {
+    const room = this.roomService.getRoom(roomId);
+    if (!room || room.status !== 'playing' || !room.currentRound?.isActive)
+      return 0;
+    const submitterName = room.currentRound.submitterName;
+    return Array.from(room.players.values()).filter(
+      (p) => p.connected && !p.isSpectator && p.name !== submitterName,
+    ).length;
+  }
+
+  private handleGuessTimeout(roomId: string, playerId: string) {
+    const result = this.roomService.processGuessTimeout(playerId);
+    if (!result.success) {
+      this.clearGuessTimer(roomId, playerId);
+      return;
+    }
+
+    const room = result.room!;
+    const player = result.player!;
+
+    // 给本人下发“超时=消耗一次猜测”的结果
+    this.server.to(playerId).emit('game:guessResult', {
+      correct: false,
+      playerName: player.name,
+      guessText: '⏰ 超时',
+      timestamp: Date.now(),
+      guessNumber: player.guessesThisRound,
+      remainingGuesses: result.remainingGuesses,
+    });
+
+    // 通知房间内其他人该玩家本次尝试结束（错误）
+    this.server.to(room.id).emit('game:playerGuessed', {
+      playerName: player.name,
+      correct: false,
+    });
+
+    // 玩家列表用：区分超时/错误/正确
+    this.server.to(room.id).emit('game:playerAttempt', {
+      playerName: player.name,
+      result: 'timeout',
+    });
+
+    // 旁观流：出题人 + 已猜对玩家 + 中途加入的观战者（isSpectator）
+    const spectators = Array.from(room.players.values()).filter(
+      (p) =>
+        p.isSpectator ||
+        p.name === room.currentRound?.submitterName ||
+        p.hasGuessedCorrectly,
+    );
+    const guessForSpectators = result.guessResult;
+    if (guessForSpectators) {
+      for (const sp of spectators) {
+        if (sp.id === playerId) continue;
+        this.server.to(sp.id).emit('game:spectatorGuess', {
+          playerName: player.name,
+          guess: guessForSpectators,
+        });
+      }
+    }
+
+    if (result.roundEnded) {
+      this.endCurrentRound(room.id);
+      return;
+    }
+
+    // 继续下一次猜测计时
+    this.scheduleGuessTimer(roomId, playerId);
+  }
 
   handleConnection(client: Socket) {
     this.logger.log(`Client connected: ${client.id}`);
@@ -54,9 +168,15 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.server.emit('room:list', this.roomService.getPublicRooms());
     } else if (room) {
       client.leave(room.id);
-      this.server
-        .to(room.id)
-        .emit('room:playerLeft', { playerName: this.getPlayerName(client) });
+
+      // 清理该玩家的计时器
+      this.clearGuessTimer(room.id, client.id);
+
+      // 不移除玩家：仅标记离线
+      this.server.to(room.id).emit('room:playerStatus', {
+        playerName: this.getPlayerName(client),
+        connected: false,
+      });
 
       if (wasHost) {
         this.server
@@ -68,6 +188,86 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         .to(room.id)
         .emit('room:updated', this.roomService.toRoomInfo(room));
       this.server.emit('room:list', this.roomService.getPublicRooms());
+
+      // #11：若回合进行中且已无任何在线猜测者，直接结束游戏
+      if (room.status === 'playing' && room.currentRound?.isActive) {
+        if (this.countConnectedGuessers(room.id) <= 0) {
+          void this.endGame(room.id);
+        }
+      }
+    }
+  }
+
+  private syncClientToRoomState(client: Socket, roomId: string) {
+    const room = this.roomService.getRoom(roomId);
+    if (!room) return;
+
+    const me = room.players.get(client.id);
+
+    if (room.status === 'waiting_submitter') {
+      client.emit('game:needSubmitter', {
+        roundNumber: room.roundHistory.length + 1,
+      });
+      return;
+    }
+
+    if (room.status === 'waiting_song') {
+      client.emit('game:submitterSelected', {
+        submitterName: room.pendingSubmitterName || '',
+      });
+      return;
+    }
+
+    if (room.status === 'playing' && room.currentRound) {
+      const round = room.currentRound;
+      client.emit('game:roundStart', {
+        roundNumber: round.roundNumber,
+        audioUrl: round.song?.audioUrl || '',
+        lyricSlice: round.lyricSlice!,
+        startTime: round.startTime,
+        // 旧字段 endTime 仍发出（客户端将逐步改为“每次猜测时长”）
+        endTime: Date.now() + room.settings.roundDuration * 1000,
+        submitterName: round.submitterName,
+      });
+
+      // 中途加入的观战者/出题人/已猜对玩家：同步已发生的猜测历史
+      if (
+        me &&
+        (me.isSpectator ||
+          me.name === round.submitterName ||
+          me.hasGuessedCorrectly)
+      ) {
+        client.emit('game:spectatorHistory', { guesses: round.guesses || [] });
+      }
+
+      // 出题人/已猜对玩家重连时：重新下发答案
+      if (
+        me &&
+        round.song &&
+        (me.name === round.submitterName || me.hasGuessedCorrectly)
+      ) {
+        client.emit('game:answerReveal', {
+          song: {
+            id: round.song.id,
+            title: round.song.title,
+            artist: round.song.artist,
+            album: round.song.album,
+            pictureUrl: round.song.pictureUrl,
+            releaseYear: round.song.releaseYear,
+            popularity: round.song.popularity,
+            language: round.song.language,
+            tags: round.song.tags,
+          },
+        });
+      }
+      return;
+    }
+
+    if (room.status === 'round_end') {
+      // 等待下一轮选择出题人，客户端会靠 room:updated + 后续 needSubmitter 同步
+      client.emit('game:needSubmitter', {
+        roundNumber: room.roundHistory.length + 1,
+      });
     }
   }
 
@@ -129,6 +329,122 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`Room created: ${room.id} by ${playerName}`);
   }
 
+  @SubscribeMessage('room:joinOrCreate')
+  handleJoinOrCreateRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      playerName: string;
+      roomName?: string;
+      password?: string;
+    },
+  ) {
+    const { roomId, playerName, roomName, password } = data;
+
+    if (!roomId || !playerName) {
+      client.emit('error', {
+        code: 'INVALID_DATA',
+        message: '房间ID和玩家名不能为空',
+      });
+      return;
+    }
+
+    const existingRoom = this.roomService.getRoomByPlayerId(client.id);
+    if (existingRoom) {
+      client.emit('error', {
+        code: 'ALREADY_IN_ROOM',
+        message: '你已经在一个房间中',
+      });
+      return;
+    }
+
+    let room = this.roomService.getRoom(roomId);
+    if (!room) {
+      try {
+        room = this.roomService.createRoom(
+          client.id,
+          playerName,
+          roomName || roomId,
+          false,
+          undefined,
+          roomId,
+        );
+      } catch (e) {
+        client.emit('error', {
+          code: 'CREATE_ROOM_FAILED',
+          message: '创建房间失败',
+        });
+        return;
+      }
+
+      (client.data as { playerName?: string }).playerName = playerName;
+      client.join(room.id);
+      client.emit('room:created', this.roomService.toRoomInfo(room));
+      client.emit('room:joined', {
+        room: this.roomService.toRoomInfo(room),
+        players: this.roomService.getPlayerInfo(room),
+        settings: room.settings,
+      });
+      this.server.emit('room:list', this.roomService.getPublicRooms());
+      return;
+    }
+
+    const result = this.roomService.joinRoom(
+      roomId,
+      client.id,
+      playerName,
+      password,
+    );
+    if (!result.success) {
+      const errorMessages: Record<string, string> = {
+        ROOM_NOT_FOUND: '房间不存在',
+        INVALID_PASSWORD: '密码错误',
+        ROOM_FULL: '房间已满',
+        NAME_TAKEN: '用户名已被占用',
+      };
+      client.emit('error', {
+        code: result.error,
+        message: errorMessages[result.error!] || '加入失败',
+      });
+      return;
+    }
+
+    room = result.room!;
+    (client.data as { playerName?: string }).playerName = playerName;
+    client.join(room.id);
+
+    client.emit('room:joined', {
+      room: this.roomService.toRoomInfo(room),
+      players: this.roomService.getPlayerInfo(room),
+      settings: room.settings,
+    });
+
+    if (result.mode === 'reconnect') {
+      this.server.to(room.id).emit('room:playerStatus', {
+        playerName,
+        connected: true,
+      });
+    } else {
+      client.to(room.id).emit('room:playerJoined', {
+        id: client.id,
+        name: playerName,
+        score: 0,
+        isReady: false,
+        isHost: false,
+        isSpectator: result.mode === 'spectator',
+        connected: true,
+        hasSubmittedSong: false,
+      });
+    }
+
+    this.server.emit('room:list', this.roomService.getPublicRooms());
+    this.syncClientToRoomState(client, room.id);
+
+    // 若游戏进行中且该玩家可猜，恢复“每次猜测”计时
+    this.scheduleGuessTimer(room.id, client.id);
+  }
+
   @SubscribeMessage('room:join')
   handleJoinRoom(
     @ConnectedSocket() client: Socket,
@@ -168,7 +484,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         INVALID_PASSWORD: '密码错误',
         ROOM_FULL: '房间已满',
         NAME_TAKEN: '用户名已被占用',
-        GAME_IN_PROGRESS: '游戏进行中，无法加入',
       };
       client.emit('error', {
         code: result.error,
@@ -187,18 +502,31 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       settings: room.settings,
     });
 
-    client.to(room.id).emit('room:playerJoined', {
-      id: client.id,
-      name: playerName,
-      score: 0,
-      isReady: false,
-      isHost: false,
-      connected: true,
-      hasSubmittedSong: false,
-    });
+    if (result.mode === 'reconnect') {
+      this.server.to(room.id).emit('room:playerStatus', {
+        playerName,
+        connected: true,
+      });
+    } else {
+      client.to(room.id).emit('room:playerJoined', {
+        id: client.id,
+        name: playerName,
+        score: 0,
+        isReady: false,
+        isHost: false,
+        isSpectator: result.mode === 'spectator',
+        connected: true,
+        hasSubmittedSong: false,
+      });
+    }
 
     this.server.emit('room:list', this.roomService.getPublicRooms());
     this.logger.log(`Player ${playerName} joined room ${room.id}`);
+
+    this.syncClientToRoomState(client, room.id);
+
+    // 若游戏进行中且该玩家可猜，恢复“每次猜测”计时
+    this.scheduleGuessTimer(room.id, client.id);
   }
 
   @SubscribeMessage('room:leave')
@@ -284,6 +612,24 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         targetSocket.leave(room.id);
       }
 
+      // 清理计时器
+      this.clearGuessTimer(room.id, result.targetId);
+
+      // 若游戏进行中，踢人可能影响回合/游戏流转
+      if (room.status === 'playing' && room.currentRound?.isActive) {
+        const wasSubmitter =
+          room.currentRound.submitterName === data.playerName;
+
+        if (wasSubmitter) {
+          // 出题人被踢：直接结束本轮，避免状态异常
+          this.endCurrentRound(room.id);
+        } else {
+          if (this.countConnectedGuessers(room.id) <= 0) {
+            void this.endGame(room.id);
+          }
+        }
+      }
+
       this.server
         .to(room.id)
         .emit('room:playerLeft', { playerName: data.playerName });
@@ -292,6 +638,53 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         .emit('room:updated', this.roomService.toRoomInfo(room));
       this.server.emit('room:list', this.roomService.getPublicRooms());
     }
+  }
+
+  @SubscribeMessage('game:abort')
+  handleAbortGame(@ConnectedSocket() client: Socket) {
+    const room = this.roomService.getRoomByPlayerId(client.id);
+    if (!room) return;
+
+    const player = room.players.get(client.id);
+    if (!player?.isHost) {
+      client.emit('error', {
+        code: 'NOT_HOST',
+        message: '只有房主可以中断游戏',
+      });
+      return;
+    }
+
+    void this.endGame(room.id);
+  }
+
+  @SubscribeMessage('room:rename')
+  handleRenameRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { name: string },
+  ) {
+    const room = this.roomService.getRoomByPlayerId(client.id);
+    if (!room) return;
+
+    const player = room.players.get(client.id);
+    if (!player?.isHost) {
+      client.emit('error', {
+        code: 'NOT_HOST',
+        message: '只有房主可以修改房间名',
+      });
+      return;
+    }
+
+    const name = (data?.name || '').trim();
+    if (!name) {
+      client.emit('error', { code: 'INVALID_NAME', message: '房间名不能为空' });
+      return;
+    }
+
+    room.name = name;
+    this.server
+      .to(room.id)
+      .emit('room:updated', this.roomService.toRoomInfo(room));
+    this.server.emit('room:list', this.roomService.getPublicRooms());
   }
 
   @SubscribeMessage('game:start')
@@ -442,14 +835,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      const [detailInfo, likes] = (await Promise.all([
+      const [detailInfo, likes] = await Promise.all([
         songId
           ? this.musicService.getSongDetailInfo(data.server, songId)
           : Promise.resolve(null),
         songId
           ? this.musicService.getSongLikes(data.server, songId)
           : Promise.resolve(null),
-      ])) as [SongDetailInfo | null, SongLikes | null];
+      ]);
 
       const song: GameSong = {
         id: songId || '',
@@ -548,11 +941,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         },
       });
 
-      // 设置回合超时
-      const timer = setTimeout(() => {
-        this.endCurrentRound(room.id);
-      }, room.settings.roundDuration * 1000);
-      this.roundTimers.set(room.id, timer);
+      // 每次猜测时长：为每个可猜玩家启动独立计时器（超时将消耗一次猜测并重置）
+      for (const p of room.players.values()) {
+        this.scheduleGuessTimer(room.id, p.id);
+      }
 
       this.logger.log(
         `Round ${started.roundNumber} started in room ${room.id}`,
@@ -580,14 +972,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         ? await this.musicService.getSongDetail(data.songId, data.server)
         : null;
 
-      const [detailInfo, likes] = (await Promise.all([
+      const [detailInfo, likes] = await Promise.all([
         data.songId
           ? this.musicService.getSongDetailInfo(data.server, data.songId)
           : Promise.resolve(null),
         data.songId
           ? this.musicService.getSongLikes(data.server, data.songId)
           : Promise.resolve(null),
-      ])) as [SongDetailInfo | null, SongLikes | null];
+      ]);
 
       const guessedSong: GameSong = {
         id: guessedDetail?.id || data.songId || '',
@@ -616,6 +1008,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           ALREADY_GUESSED_CORRECTLY: '你已经猜对了',
           NO_MORE_GUESSES: '本轮猜测次数已用完',
           SUBMITTER_CANNOT_GUESS: '出题人不能参与猜测',
+          SPECTATOR_CANNOT_GUESS: '观战者不能参与猜测',
         };
         client.emit('error', {
           code: result.error,
@@ -626,6 +1019,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       const room = result.room!;
       const player = result.player!;
+
+      // 重置该玩家的“每次猜测计时器”
+      this.scheduleGuessTimer(room.id, client.id);
 
       const ip = client.handshake.address;
       await this.statsService.recordSongGuess({
@@ -695,10 +1091,18 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         correct: result.correct,
       });
 
-      // 旁观猜测流：出题人 + 已猜对玩家可以看到其他人的每次猜测详情
+      // 玩家列表用：区分错误/正确
+      this.server.to(room.id).emit('game:playerAttempt', {
+        playerName: player.name,
+        result: result.correct ? 'correct' : 'wrong',
+      });
+
+      // 旁观猜测流：出题人 + 已猜对玩家 + isSpectator 观战者可以看到每次猜测详情
       const spectators = Array.from(room.players.values()).filter(
         (p) =>
-          p.name === room.currentRound?.submitterName || p.hasGuessedCorrectly,
+          p.isSpectator ||
+          p.name === room.currentRound?.submitterName ||
+          p.hasGuessedCorrectly,
       );
       const guessForSpectators = result.guessResult;
       if (guessForSpectators) {
@@ -778,12 +1182,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   private endCurrentRound(roomId: string) {
-    // 清除计时器
-    const timer = this.roundTimers.get(roomId);
-    if (timer) {
-      clearTimeout(timer);
-      this.roundTimers.delete(roomId);
-    }
+    // 清除所有玩家猜测计时器
+    this.clearAllGuessTimers(roomId);
 
     const room = this.roomService.getRoom(roomId);
     if (!room || !room.currentRound) return;

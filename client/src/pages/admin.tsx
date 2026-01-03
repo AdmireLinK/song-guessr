@@ -57,7 +57,7 @@ export function AdminPage() {
   const [error, setError] = useState<string | null>(null);
 
   const token = localStorage.getItem('adminToken');
-  const serverUrl = import.meta.env.VITE_SERVER_URL || '';
+  const serverUrl = import.meta.env.VITE_SERVER_URL || import.meta.env.VITE_API_URL || '';
 
   const fetchData = useCallback(async () => {
     if (!token) {

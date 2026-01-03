@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Users, Lock, RefreshCw, ArrowLeft, Crown } from 'lucide-react';
+import { Plus, Users, Lock, Crown } from 'lucide-react';
 import {
   Button,
   Input,
@@ -38,7 +38,7 @@ export function LobbyPage() {
 
     const interval = setInterval(() => {
       socketService.listRooms();
-    }, 5000);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, []);
@@ -110,19 +110,11 @@ export function LobbyPage() {
     }
   };
 
-  const handleRefresh = () => {
-    socketService.listRooms();
-  };
-
   return (
     <div className="min-h-screen paper-texture p-4">
       <div className="max-w-4xl mx-auto">
         {/* 头部 */}
         <div className="flex items-center justify-between mb-6">
-          <Button variant="ghost" onClick={() => navigate('/')}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            返回
-          </Button>
           <SketchLogo size="sm" />
           <div className="flex items-center gap-2">
             <Input
@@ -164,10 +156,6 @@ export function LobbyPage() {
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-hand">🏠 游戏大厅</h2>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={handleRefresh}>
-              <RefreshCw className="w-4 h-4 mr-1" />
-              刷新
-            </Button>
             <Button onClick={() => setShowCreateDialog(true)}>
               <Plus className="w-4 h-4 mr-1" />
               创建房间
@@ -236,10 +224,10 @@ export function LobbyPage() {
                         </span>
                         <Button
                           onClick={() => handleJoinRoom(room.id, room.isPrivate)}
-                          disabled={room.status !== 'waiting' || room.playerCount >= room.maxPlayers}
+                          disabled={room.playerCount >= room.maxPlayers}
                           size="sm"
                         >
-                          加入
+                          {room.status === 'waiting' ? '加入' : '观战'}
                         </Button>
                       </div>
                     </div>

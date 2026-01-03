@@ -24,12 +24,19 @@ import { MusicService } from './game/music.service';
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
       serveRoot: '/admin',
-      // Use simple path and wildcard patterns that path-to-regexp understands
-      exclude: ['/api', '/api/*', '/game', '/game/*'],
     }),
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', '..', 'client', 'dist'),
-      exclude: ['/api', '/api/*', '/game', '/game/*', '/admin', '/admin/*'],
+      // path-to-regexp v8 不支持 "/api/*"（缺少参数名），这里用“带名字的通配符”写法。
+      // 语法：/api/*path 代表 /api/ 后的任意段。
+      exclude: [
+        '/api',
+        '/api/*path',
+        '/game',
+        '/game/*path',
+        '/admin',
+        '/admin/*path',
+      ],
     }),
     GameModule,
     AdminModule,

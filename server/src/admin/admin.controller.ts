@@ -93,6 +93,14 @@ export class AdminController {
     return this.statsService.getLeaderboard(limit ? parseInt(limit, 10) : 10);
   }
 
+  // 管理面板：近 N 天日统计
+  @Get('stats/daily')
+  @UseGuards(AdminGuard)
+  async getDaily(@Query('days') days?: string) {
+    const n = days ? parseInt(days, 10) : 7;
+    return this.statsService.getDailyStats(isNaN(n) ? 7 : n);
+  }
+
   // 获取遥测数据
   @Get('telemetry')
   @UseGuards(AdminGuard)

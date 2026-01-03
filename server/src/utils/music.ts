@@ -71,6 +71,8 @@ export interface SongInfo {
   artist: string;
   album: string;
   pic_id?: string;
+  // 搜索结果里直接带封面 URL（Meting API 会返回 pic 字段）
+  pictureUrl?: string;
 }
 
 export interface MusicResources {
@@ -1086,6 +1088,7 @@ export async function searchSongs(
         artist: item.author || '',
         album: item.album || '',
         pic_id: item.pic_id || '',
+        pictureUrl: item.pic || undefined,
       };
     });
   } catch (error) {

@@ -116,6 +116,10 @@ class SocketService {
       store.removePlayer(playerName);
     });
 
+    this.socket.on('room:playerStatus', ({ playerName, connected }) => {
+      store.updatePlayerConnected(playerName, connected);
+    });
+
     this.socket.on('room:playerReady', ({ playerName, isReady }) => {
       store.updatePlayerReady(playerName, isReady);
     });
@@ -149,11 +153,16 @@ class SocketService {
       store.setPendingSubmitterName(null);
       store.setRevealedAnswer(null);
       store.clearSpectatorGuesses();
+      store.clearAttempts();
+      store.setGuessDeadline(null);
       store.setGameStatus('waiting_submitter');
     });
 
     this.socket.on('game:submitterSelected', ({ submitterName }) => {
       store.setPendingSubmitterName(submitterName);
+      store.clearSpectatorGuesses();
+      store.clearAttempts();
+      store.setGuessDeadline(null);
       // 进入等待出题阶段：只有出题人会打开出题弹窗
       store.setGameStatus('waiting_song');
     });
@@ -167,6 +176,24 @@ class SocketService {
       store.addSpectatorGuess(guess);
     });
 
+    this.socket.on('game:spectatorHistory', ({ guesses }) => {
+      const list = Array.isArray(guesses) ? guesses : [];
+      store.setSpectatorGuesses(list);
+
+      // 同步尝试结果到玩家列表
+      store.clearAttempts();
+      for (const g of list) {
+        const isTimeout = typeof g?.guessText === 'string' && g.guessText.includes('⏰');
+        store.recordAttempt(g.playerName, g.correct ? 'correct' : (isTimeout ? 'timeout' : 'wrong'));
+      }
+    });
+
+    this.socket.on('game:playerAttempt', ({ playerName, result }) => {
+      const r = result === 'timeout' || result === 'wrong' || result === 'correct' ? result : null;
+      if (!playerName || !r) return;
+      store.recordAttempt(playerName, r);
+    });
+
     this.socket.on('game:waitingForSongs', ({ playersNeeded }) => {
       store.setPlayersNeedingSongs(playersNeeded);
     });
@@ -177,10 +204,39 @@ class SocketService {
 
     this.socket.on('game:roundStart', (data) => {
       store.startRound(data);
+
+      // “每次猜测时长”：仅对可猜玩家启动本次尝试计时
+      const st = useGameStore.getState();
+      const me = st.players.find((p) => p.name === st.playerName);
+      const amSubmitter = st.playerName === data.submitterName;
+      const amSpectator = !!me?.isSpectator || amSubmitter;
+      if (st.gameStatus !== 'playing' || amSpectator) {
+        store.setGuessDeadline(null);
+        return;
+      }
+      store.setGuessDeadline(Date.now() + st.settings.roundDuration * 1000);
     });
 
     this.socket.on('game:guessResult', (result) => {
       store.addGuessResult(result);
+
+      // 记录自己的尝试类型（❌/⏰/✅）
+      const isTimeout = typeof result?.guessText === 'string' && result.guessText.includes('⏰');
+      store.recordAttempt(result.playerName, result.correct ? 'correct' : (isTimeout ? 'timeout' : 'wrong'));
+
+      const st = useGameStore.getState();
+      if (result.playerName !== st.playerName) return;
+
+      // 猜对或次数用尽则停止计时；否则重置下一次尝试计时
+      const remaining = typeof result.remainingGuesses === 'number'
+        ? result.remainingGuesses
+        : Math.max(0, st.settings.maxGuessesPerRound - st.myGuesses.length);
+
+      if (result.correct || remaining <= 0) {
+        store.setGuessDeadline(null);
+      } else {
+        store.setGuessDeadline(Date.now() + st.settings.roundDuration * 1000);
+      }
     });
 
     this.socket.on('game:playerGuessed', ({ playerName, correct }) => {
@@ -188,10 +244,14 @@ class SocketService {
     });
 
     this.socket.on('game:roundEnd', (data) => {
+      store.setGuessDeadline(null);
+      store.clearAttempts();
       store.endRound(data);
     });
 
     this.socket.on('game:gameEnd', (data) => {
+      store.setGuessDeadline(null);
+      store.clearAttempts();
       store.endGame(data);
     });
 
@@ -223,6 +283,10 @@ class SocketService {
     this.socket?.emit('room:join', { roomId, playerName, password });
   }
 
+  joinOrCreateRoom(roomId: string, playerName: string, roomName?: string, password?: string) {
+    this.socket?.emit('room:joinOrCreate', { roomId, playerName, roomName, password });
+  }
+
   leaveRoom() {
     this.socket?.emit('room:leave');
   }
@@ -233,6 +297,10 @@ class SocketService {
 
   updateSettings(settings: any) {
     this.socket?.emit('room:updateSettings', settings);
+  }
+
+  renameRoom(name: string) {
+    this.socket?.emit('room:rename', { name });
   }
 
   kickPlayer(playerName: string) {
@@ -246,6 +314,10 @@ class SocketService {
   // 游戏操作
   startGame() {
     this.socket?.emit('game:start');
+  }
+
+  abortGame() {
+    this.socket?.emit('game:abort');
   }
 
   chooseSubmitter(playerName: string) {

@@ -9,14 +9,10 @@ import {
   TelemetrySchema,
   GameStats,
   GameStatsSchema,
-  PlayerStats,
-  PlayerStatsSchema,
-  AdminUser,
-  AdminUserSchema,
   SongStats,
   SongStatsSchema,
-  ActionLog,
-  ActionLogSchema,
+  DailyStats,
+  DailyStatsSchema,
 } from '../schemas';
 import { GameModule } from '../game/game.module';
 
@@ -25,10 +21,8 @@ import { GameModule } from '../game/game.module';
     MongooseModule.forFeature([
       { name: Telemetry.name, schema: TelemetrySchema },
       { name: GameStats.name, schema: GameStatsSchema },
-      { name: PlayerStats.name, schema: PlayerStatsSchema },
-      { name: AdminUser.name, schema: AdminUserSchema },
       { name: SongStats.name, schema: SongStatsSchema },
-      { name: ActionLog.name, schema: ActionLogSchema },
+      { name: DailyStats.name, schema: DailyStatsSchema },
     ]),
     forwardRef(() => GameModule),
   ],

@@ -3,12 +3,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Telemetry, TelemetryDocument } from '../schemas/telemetry.schema';
 import { GameStats, GameStatsDocument } from '../schemas/game-stats.schema';
-import {
-  PlayerStats,
-  PlayerStatsDocument,
-} from '../schemas/player-stats.schema';
 import { SongStats, SongStatsDocument } from '../schemas/song-stats.schema';
-import { ActionLog, ActionLogDocument } from '../schemas/action-log.schema';
+import { DailyStats, DailyStatsDocument } from '../schemas/daily-stats.schema';
 import { Room, PlayerScore } from '../game/game.types';
 
 @Injectable()
@@ -18,13 +14,31 @@ export class StatsService {
     private telemetryModel: Model<TelemetryDocument>,
     @InjectModel(GameStats.name)
     private gameStatsModel: Model<GameStatsDocument>,
-    @InjectModel(PlayerStats.name)
-    private playerStatsModel: Model<PlayerStatsDocument>,
     @InjectModel(SongStats.name)
     private songStatsModel: Model<SongStatsDocument>,
-    @InjectModel(ActionLog.name)
-    private actionLogModel: Model<ActionLogDocument>,
+    @InjectModel(DailyStats.name)
+    private dailyStatsModel: Model<DailyStatsDocument>,
   ) {}
+
+  private todayKey(date = new Date()): string {
+    return date.toISOString().split('T')[0];
+  }
+
+  private async incDaily(
+    dateKey: string,
+    inc: Partial<Record<'games' | 'guesses' | 'errors', number>>,
+    max?: Partial<Record<'players', number>>,
+  ) {
+    const update: any = {
+      $setOnInsert: { date: dateKey },
+    };
+    if (Object.keys(inc).length > 0) update.$inc = inc;
+    if (max && Object.keys(max).length > 0) update.$max = max;
+
+    await this.dailyStatsModel.updateOne({ date: dateKey }, update, {
+      upsert: true,
+    });
+  }
 
   // 记录音乐请求详情
   async recordMusicRequest(data: {
@@ -37,12 +51,8 @@ export class StatsService {
     playerName?: string;
     ip?: string;
   }) {
-    const log = new this.actionLogModel({
-      type: 'music_request',
-      ...data,
-      timestamp: new Date(),
-    });
-    await log.save();
+    // 按需求：不保存 action logs，也不保存细粒度的 music request
+    void data;
   }
 
   // 记录提交歌曲
@@ -72,17 +82,7 @@ export class StatsService {
       { upsert: true },
     );
 
-    await this.actionLogModel.create({
-      type: 'submit',
-      songId: data.songId,
-      title: data.title,
-      artist: data.artist,
-      server: data.server,
-      language: data.language,
-      playerName: data.playerName,
-      ip: data.ip,
-      timestamp: new Date(),
-    });
+    void data;
   }
 
   // 记录猜歌
@@ -105,6 +105,8 @@ export class StatsService {
           title: data.title,
           artist: data.artist,
           language: data.language,
+          popularity: data.popularity,
+          releaseYear: data.releaseYear,
         },
         $inc: {
           timesGuessed: 1,
@@ -114,22 +116,9 @@ export class StatsService {
       { upsert: true },
     );
 
-    await this.actionLogModel.create({
-      type: 'guess',
-      songId: data.songId,
-      title: data.title,
-      artist: data.artist,
-      server: data.server,
-      language: data.language,
-      playerName: data.playerName,
-      ip: data.ip,
-      correct: data.correct,
-      timestamp: new Date(),
-      detail: {
-        popularity: data.popularity,
-        releaseYear: data.releaseYear,
-      },
-    });
+    await this.incDaily(this.todayKey(), { guesses: 1 });
+
+    void data;
   }
 
   // 记录遥测数据
@@ -151,7 +140,14 @@ export class StatsService {
       ...data,
       timestamp: new Date(),
     });
-    return telemetry.save();
+    const saved = await telemetry.save();
+
+    // 仅聚合存储错误计数
+    if (data.type === 'error') {
+      await this.incDaily(this.todayKey(), { errors: 1 });
+    }
+
+    return saved;
   }
 
   // 记录前端错误
@@ -201,12 +197,19 @@ export class StatsService {
 
   // 记录游戏开始
   async recordGameStart(room: Room): Promise<GameStats> {
+    await this.incDaily(
+      this.todayKey(),
+      { games: 1 },
+      { players: room.players.size },
+    );
+
     const gameStats = new this.gameStatsModel({
       roomId: room.id,
       roomName: room.name,
       hostName: room.hostName,
       roundCount: 0,
       playerCount: room.players.size,
+      // 仍保留游戏级数据（便于排障/基本统计），但不再维护 playerstats/actionlogs
       players: Array.from(room.players.values()).map((p) => ({
         name: p.name,
         score: 0,
@@ -274,56 +277,9 @@ export class StatsService {
       },
     );
 
-    // 更新玩家统计
-    const today = new Date().toISOString().split('T')[0];
-    for (const score of finalScores) {
-      const isWinner = score.name === winner;
-      const player = Array.from(room.players.values()).find(
-        (p) => p.name === score.name,
-      );
-
-      await this.playerStatsModel.updateOne(
-        { playerName: score.name },
-        {
-          $inc: {
-            totalGames: 1,
-            totalScore: score.score,
-            totalWins: isWinner ? 1 : 0,
-            correctGuesses: score.correctGuesses,
-            totalGuesses: score.totalGuesses,
-            songsSubmitted: player?.songsSubmitted || 0,
-          },
-          $set: {
-            lastPlayedAt: endTime,
-          },
-          $push: {
-            recentRooms: {
-              $each: [room.id],
-              $slice: -10, // 只保留最近10个房间
-            },
-          },
-          $setOnInsert: {
-            playerName: score.name,
-            roomsHosted: 0,
-            achievements: [],
-            dailyStats: {},
-          },
-        },
-        { upsert: true },
-      );
-
-      // 更新每日统计
-      await this.playerStatsModel.updateOne(
-        { playerName: score.name },
-        {
-          $inc: {
-            [`dailyStats.${today}.games`]: 1,
-            [`dailyStats.${today}.wins`]: isWinner ? 1 : 0,
-            [`dailyStats.${today}.score`]: score.score,
-          },
-        },
-      );
-    }
+    void winner;
+    void room;
+    void finalScores;
   }
 
   // 获取遥测数据
@@ -383,12 +339,10 @@ export class StatsService {
   }
 
   // 获取排行榜
-  async getLeaderboard(limit = 10): Promise<PlayerStats[]> {
-    return this.playerStatsModel
-      .find()
-      .sort({ totalScore: -1 })
-      .limit(limit)
-      .exec();
+  async getLeaderboard(limit = 10): Promise<any[]> {
+    // 按需求：不保存 playerstats，因此不提供排行榜数据
+    void limit;
+    return [];
   }
 
   // 获取仪表盘数据
@@ -398,35 +352,39 @@ export class StatsService {
     activeToday: number;
     errorCount24h: number;
     recentGames: GameStats[];
-    topPlayers: PlayerStats[];
+    topPlayers: any[];
   }> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
-    const [
-      totalGames,
-      totalPlayers,
-      activeToday,
-      errorCount24h,
-      recentGames,
-      topPlayers,
-    ] = await Promise.all([
-      this.gameStatsModel.countDocuments({ completed: true }),
-      this.playerStatsModel.countDocuments(),
-      this.playerStatsModel.countDocuments({ lastPlayedAt: { $gte: today } }),
-      this.telemetryModel.countDocuments({
-        type: 'error',
-        timestamp: { $gte: yesterday },
-      }),
-      this.gameStatsModel
-        .find({ completed: true })
-        .sort({ startTime: -1 })
-        .limit(5)
-        .exec(),
-      this.playerStatsModel.find().sort({ totalScore: -1 }).limit(5).exec(),
-    ]);
+    const [totalGames, todayDoc, errorCount24h, recentGames] =
+      await Promise.all([
+        this.gameStatsModel.countDocuments({ completed: true }),
+        this.dailyStatsModel.findOne({ date: this.todayKey(today) }).exec(),
+        this.telemetryModel.countDocuments({
+          type: 'error',
+          timestamp: { $gte: yesterday },
+        }),
+        this.gameStatsModel
+          .find({ completed: true })
+          .sort({ startTime: -1 })
+          .limit(5)
+          .exec(),
+      ]);
+
+    const activeToday = todayDoc?.players || 0;
+    // 没有 playerstats 时，“总玩家数”仅提供一个粗口径：取最近 30 天内每日玩家数的最大值
+    const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const sinceKey = this.todayKey(since30d);
+    const maxPlayersAgg = await this.dailyStatsModel
+      .aggregate([
+        { $match: { date: { $gte: sinceKey } } },
+        { $group: { _id: null, maxPlayers: { $max: '$players' } } },
+      ])
+      .exec();
+    const totalPlayers = maxPlayersAgg?.[0]?.maxPlayers || 0;
 
     return {
       totalGames,
@@ -434,7 +392,7 @@ export class StatsService {
       activeToday,
       errorCount24h,
       recentGames,
-      topPlayers,
+      topPlayers: [],
     };
   }
 
@@ -474,7 +432,6 @@ export class StatsService {
 
   async getActivity(rangeDays = 7): Promise<{
     rangeDays: number;
-    activeIpCount: number;
     guessCount: number;
     errorCount: number;
     series: Array<{
@@ -485,79 +442,70 @@ export class StatsService {
     }>;
   }> {
     const since = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000);
+    const sinceKey = this.todayKey(since);
 
-    const [activeIpsRaw, guessCount, errorCount, guessSeries, errorSeries] =
-      await Promise.all([
-        this.actionLogModel.distinct('ip', { timestamp: { $gte: since } }),
-        this.actionLogModel.countDocuments({
-          type: 'guess',
-          timestamp: { $gte: since },
-        }),
-        this.telemetryModel.countDocuments({
-          type: 'error',
-          timestamp: { $gte: since },
-        }),
-        this.actionLogModel.aggregate([
-          { $match: { type: 'guess', timestamp: { $gte: since } } },
-          {
-            $group: {
-              _id: {
-                $dateToString: { format: '%Y-%m-%d', date: '$timestamp' },
-              },
-              count: { $sum: 1 },
-              ips: { $addToSet: '$ip' },
-            },
-          },
-          { $sort: { _id: 1 } },
-        ]),
-        this.telemetryModel.aggregate([
-          { $match: { type: 'error', timestamp: { $gte: since } } },
-          {
-            $group: {
-              _id: {
-                $dateToString: { format: '%Y-%m-%d', date: '$timestamp' },
-              },
-              count: { $sum: 1 },
-            },
-          },
-          { $sort: { _id: 1 } },
-        ]),
-      ]);
+    const docs = await this.dailyStatsModel
+      .find({ date: { $gte: sinceKey } })
+      .sort({ date: 1 })
+      .exec();
 
-    const map = new Map<
-      string,
-      { guesses: number; errors: number; activeIps: Set<string> }
-    >();
-    for (const g of guessSeries) {
-      map.set(g._id, {
-        guesses: g.count,
-        errors: 0,
-        activeIps: new Set(g.ips.filter(Boolean)),
-      });
-    }
-    for (const e of errorSeries) {
-      const entry = map.get(e._id) || {
-        guesses: 0,
-        errors: 0,
-        activeIps: new Set<string>(),
-      };
-      entry.errors = e.count;
-      map.set(e._id, entry);
-    }
-
-    const series = Array.from(map.entries()).map(([date, value]) => ({
-      date,
-      guesses: value.guesses,
-      errors: value.errors,
-      activeIps: value.activeIps.size,
+    const guessCount = docs.reduce((s, d) => s + (d.guesses || 0), 0);
+    const errorCount = docs.reduce((s, d) => s + (d.errors || 0), 0);
+    const series = docs.map((d) => ({
+      date: d.date,
+      guesses: d.guesses || 0,
+      errors: d.errors || 0,
+      // 保持返回字段兼容：activeIps 作为“玩家数”口径
+      activeIps: d.players || 0,
     }));
 
     return {
       rangeDays,
-      activeIpCount: activeIpsRaw.filter(Boolean).length,
       guessCount,
       errorCount,
       series,
     };
+  }
+
+  // 给管理面板用的“近 N 天日统计”
+  async getDailyStats(days = 7): Promise<{
+    dates: string[];
+    players: number[];
+    games: number[];
+    guesses: number[];
+    errors: number[];
+  }> {
+    const end = new Date();
+    end.setHours(0, 0, 0, 0);
+
+    const start = new Date(end);
+    start.setDate(start.getDate() - (Math.max(1, days) - 1));
+
+    const startKey = this.todayKey(start);
+    const docs = await this.dailyStatsModel
+      .find({ date: { $gte: startKey } })
+      .sort({ date: 1 })
+      .exec();
+    const map = new Map(docs.map((d) => [d.date, d]));
+
+    const dates: string[] = [];
+    const players: number[] = [];
+    const games: number[] = [];
+    const guesses: number[] = [];
+    const errors: number[] = [];
+
+    const cursor = new Date(start);
+    while (cursor <= end) {
+      const key = this.todayKey(cursor);
+      const d = map.get(key);
+      dates.push(key);
+      players.push(d?.players || 0);
+      games.push(d?.games || 0);
+      guesses.push(d?.guesses || 0);
+      errors.push(d?.errors || 0);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    return { dates, players, games, guesses, errors };
   }
 }

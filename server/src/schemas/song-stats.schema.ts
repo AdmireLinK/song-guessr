@@ -20,6 +20,21 @@ export class SongStats {
   @Prop()
   pictureUrl?: string;
 
+  @Prop()
+  album?: string;
+
+  @Prop()
+  language?: string;
+
+  @Prop()
+  releaseYear?: number;
+
+  @Prop()
+  popularity?: number;
+
+  @Prop({ type: [String] })
+  tags?: string[];
+
   @Prop({ default: 0 })
   timesAsQuestion: number; // 作为出题歌曲的次数
 

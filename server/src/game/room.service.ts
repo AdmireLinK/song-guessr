@@ -50,8 +50,12 @@ export class RoomService {
     roomName: string,
     isPrivate = false,
     password?: string,
+    forcedRoomId?: string,
   ): Room {
-    const roomId = nanoid(8);
+    const roomId = forcedRoomId || nanoid(8);
+    if (this.rooms.has(roomId)) {
+      throw new Error('ROOM_ID_ALREADY_EXISTS');
+    }
 
     const host: Player = {
       id: hostSocketId,
@@ -59,6 +63,7 @@ export class RoomService {
       score: 0,
       isReady: true,
       isHost: true,
+      isSpectator: false,
       guessesThisRound: 0,
       correctGuessesTotal: 0,
       totalGuessesTotal: 0,
@@ -95,7 +100,13 @@ export class RoomService {
     playerId: string,
     playerName: string,
     password?: string,
-  ): { success: boolean; error?: string; room?: Room } {
+  ): {
+    success: boolean;
+    error?: string;
+    room?: Room;
+    mode?: 'player' | 'spectator' | 'reconnect';
+    replacedPlayerId?: string;
+  } {
     const room = this.rooms.get(roomId);
 
     if (!room) {
@@ -106,27 +117,47 @@ export class RoomService {
       return { success: false, error: 'INVALID_PASSWORD' };
     }
 
-    if (room.players.size >= room.maxPlayers) {
+    const connectedCount = Array.from(room.players.values()).filter(
+      (p) => p.connected,
+    ).length;
+    if (connectedCount >= room.maxPlayers) {
       return { success: false, error: 'ROOM_FULL' };
     }
 
-    // 检查用户名是否已存在
-    for (const player of room.players.values()) {
-      if (player.name === playerName) {
-        return { success: false, error: 'NAME_TAKEN' };
+    // 允许断线重连：同名且 disconnected -> 复用玩家状态并替换 socketId
+    for (const [existingId, existing] of room.players.entries()) {
+      if (existing.name !== playerName) continue;
+      if (!existing.connected) {
+        room.players.delete(existingId);
+        existing.id = playerId;
+        existing.connected = true;
+        room.players.set(playerId, existing);
+
+        this.playerRoomMap.delete(existingId);
+        this.playerRoomMap.set(playerId, roomId);
+
+        if (existing.isHost) {
+          room.hostId = playerId;
+        }
+
+        return {
+          success: true,
+          room,
+          mode: 'reconnect',
+          replacedPlayerId: existingId,
+        };
       }
+      return { success: false, error: 'NAME_TAKEN' };
     }
 
-    if (room.status !== 'waiting') {
-      return { success: false, error: 'GAME_IN_PROGRESS' };
-    }
-
+    const isSpectator = room.status !== 'waiting';
     const player: Player = {
       id: playerId,
       name: playerName,
       score: 0,
       isReady: false,
       isHost: false,
+      isSpectator,
       guessesThisRound: 0,
       correctGuessesTotal: 0,
       totalGuessesTotal: 0,
@@ -138,7 +169,7 @@ export class RoomService {
     room.players.set(playerId, player);
     this.playerRoomMap.set(playerId, roomId);
 
-    return { success: true, room };
+    return { success: true, room, mode: isSpectator ? 'spectator' : 'player' };
   }
 
   leaveRoom(playerId: string): {
@@ -172,7 +203,7 @@ export class RoomService {
     // 如果房主离开，转移房主
     if (wasHost) {
       const iter = room.players.values().next();
-      const newHost = (iter.done ? undefined : iter.value) as Player | undefined;
+      const newHost = iter.done ? undefined : iter.value;
       if (newHost) {
         newHost.isHost = true;
         newHost.isReady = true;
@@ -333,6 +364,10 @@ export class RoomService {
     const player = room.players.get(playerId);
     if (!player) return { success: false, error: 'PLAYER_NOT_FOUND' };
 
+    if (player.isSpectator) {
+      return { success: false, error: 'SPECTATOR_CANNOT_GUESS' };
+    }
+
     if (
       !room.pendingSubmitterName ||
       room.pendingSubmitterName !== player.name
@@ -435,7 +470,8 @@ export class RoomService {
     const chosenSong = song ?? room.songQueue.shift();
     if (!chosenSong) return null;
 
-    const rawLyrics: unknown = (chosenSong as unknown as { lyrics?: unknown }).lyrics;
+    const rawLyrics: unknown = (chosenSong as unknown as { lyrics?: unknown })
+      .lyrics;
     const lyrics: LyricLine[] = Array.isArray(rawLyrics)
       ? (rawLyrics as LyricLine[])
       : this.parseLyrics(typeof rawLyrics === 'string' ? rawLyrics : '');
@@ -633,6 +669,70 @@ export class RoomService {
     };
   }
 
+  processGuessTimeout(playerId: string): {
+    success: boolean;
+    error?: string;
+    room?: Room;
+    player?: Player;
+    roundEnded?: boolean;
+    remainingGuesses?: number;
+    guessResult?: any;
+  } {
+    const room = this.getRoomByPlayerId(playerId);
+    if (!room) return { success: false, error: 'NOT_IN_ROOM' };
+
+    if (room.status !== 'playing' || !room.currentRound?.isActive) {
+      return { success: false, error: 'NO_ACTIVE_ROUND' };
+    }
+
+    const player = room.players.get(playerId);
+    if (!player) return { success: false, error: 'PLAYER_NOT_FOUND' };
+
+    if (player.isSpectator) {
+      return { success: false, error: 'SPECTATOR_CANNOT_GUESS' };
+    }
+
+    if (player.hasGuessedCorrectly) {
+      return { success: false, error: 'ALREADY_GUESSED_CORRECTLY' };
+    }
+
+    if (player.name === room.currentRound?.submitterName) {
+      return { success: false, error: 'SUBMITTER_CANNOT_GUESS' };
+    }
+
+    if (player.guessesThisRound >= room.settings.maxGuessesPerRound) {
+      return { success: false, error: 'NO_MORE_GUESSES' };
+    }
+
+    player.guessesThisRound++;
+    player.totalGuessesTotal++;
+
+    const guessResult = {
+      correct: false,
+      playerName: player.name,
+      guessText: '⏰ 超时',
+      timestamp: Date.now(),
+      guessNumber: player.guessesThisRound,
+    };
+
+    room.currentRound.guesses.push(guessResult);
+
+    const remainingGuesses =
+      room.settings.maxGuessesPerRound - player.guessesThisRound;
+
+    // 超时永远不触发 endOnFirstCorrect，仅检查是否所有人完成
+    const roundEnded = this.allPlayersFinished(room);
+
+    return {
+      success: true,
+      room,
+      player,
+      roundEnded,
+      remainingGuesses,
+      guessResult,
+    };
+  }
+
   private buildMetaTags(song: GameSong): string[] {
     const raw: string[] = [];
     if (song.artist) {
@@ -677,6 +777,10 @@ export class RoomService {
 
   private allPlayersFinished(room: Room): boolean {
     for (const player of room.players.values()) {
+      // 观战者/离线玩家不参与本轮结束判定
+      if (player.isSpectator) continue;
+      if (!player.connected) continue;
+
       if (
         !player.hasGuessedCorrectly &&
         player.guessesThisRound < room.settings.maxGuessesPerRound &&
@@ -864,11 +968,14 @@ export class RoomService {
   }
 
   toRoomInfo(room: Room): RoomInfo {
+    const connectedCount = Array.from(room.players.values()).filter(
+      (p) => p.connected,
+    ).length;
     return {
       id: room.id,
       name: room.name,
       hostName: room.hostName,
-      playerCount: room.players.size,
+      playerCount: connectedCount,
       maxPlayers: room.maxPlayers,
       status: room.status,
       isPrivate: room.isPrivate,
@@ -881,6 +988,7 @@ export class RoomService {
     score: number;
     isReady: boolean;
     isHost: boolean;
+    isSpectator?: boolean;
     connected: boolean;
     hasSubmittedSong: boolean;
   }> {
@@ -890,6 +998,7 @@ export class RoomService {
       score: number;
       isReady: boolean;
       isHost: boolean;
+      isSpectator?: boolean;
       connected: boolean;
       hasSubmittedSong: boolean;
     }> = [];
@@ -900,11 +1009,57 @@ export class RoomService {
         score: player.score,
         isReady: player.isReady,
         isHost: player.isHost,
+        isSpectator: player.isSpectator,
         connected: player.connected,
         hasSubmittedSong: !!player.submittedSong,
       });
     }
     return players;
+  }
+
+  markDisconnected(playerId: string): {
+    room?: Room;
+    wasHost: boolean;
+    dissolved: boolean;
+  } {
+    const roomId = this.playerRoomMap.get(playerId);
+    if (!roomId) {
+      return { wasHost: false, dissolved: false };
+    }
+
+    const room = this.rooms.get(roomId);
+    if (!room) {
+      this.playerRoomMap.delete(playerId);
+      return { wasHost: false, dissolved: false };
+    }
+
+    const player = room.players.get(playerId);
+    if (!player) {
+      this.playerRoomMap.delete(playerId);
+      return { room, wasHost: false, dissolved: false };
+    }
+
+    const wasHost = !!player.isHost;
+    player.connected = false;
+
+    // 允许新 socket 以同名重连
+    this.playerRoomMap.delete(playerId);
+
+    // 房主断线则转移房主，避免卡住
+    if (wasHost) {
+      const nextHost = Array.from(room.players.values()).find(
+        (p) => p.connected && p.id !== playerId,
+      );
+      if (nextHost) {
+        for (const p of room.players.values()) p.isHost = false;
+        nextHost.isHost = true;
+        nextHost.isReady = true;
+        room.hostId = nextHost.id;
+        room.hostName = nextHost.name;
+      }
+    }
+
+    return { room, wasHost, dissolved: false };
   }
 
   // 获取所有活跃房间的详细信息（用于管理面板）
@@ -932,6 +1087,6 @@ export class RoomService {
     wasHost: boolean;
     dissolved: boolean;
   } {
-    return this.leaveRoom(playerId);
+    return this.markDisconnected(playerId);
   }
 }

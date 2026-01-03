@@ -17,6 +17,7 @@ export interface Player {
   score: number;
   isReady: boolean;
   isHost: boolean;
+  isSpectator?: boolean;
   connected: boolean;
   hasSubmittedSong: boolean;
   hasGuessedCorrectly?: boolean;
@@ -81,6 +82,8 @@ export interface GuessResult {
   >;
 }
 
+export type AttemptResult = 'wrong' | 'timeout' | 'correct';
+
 export interface ChatMessage {
   id?: string;
   playerName: string;
@@ -133,7 +136,11 @@ interface GameState {
   pendingSubmitterName: string | null;
   revealedAnswer: Pick<GameSong, 'id' | 'title' | 'artist' | 'album' | 'pictureUrl' | 'releaseYear' | 'popularity' | 'language' | 'tags'> | null;
   spectatorGuesses: GuessResult[];
+  // 每名玩家的本轮尝试结果（用于玩家列表展示：❌/⏰/✅）
+  attemptsByPlayer: Record<string, AttemptResult[]>;
   currentRound: RoundData | null;
+  // “每次猜测时长”倒计时：当前玩家本次尝试的截止时间（毫秒时间戳）
+  guessDeadline: number | null;
   myGuesses: GuessResult[];
   roundEndData: RoundEndData | null;
   gameEndData: GameEndData | null;
@@ -149,6 +156,7 @@ interface GameState {
   addPlayer: (player: Player) => void;
   removePlayer: (playerName: string) => void;
   updatePlayerReady: (playerName: string, isReady: boolean) => void;
+  updatePlayerConnected: (playerName: string, connected: boolean) => void;
   updateHost: (newHostName: string) => void;
   leaveRoom: () => void;
   setGameStatus: (status: GameStatus) => void;
@@ -156,9 +164,13 @@ interface GameState {
   setPendingSubmitterName: (name: string | null) => void;
   setRevealedAnswer: (song: GameState['revealedAnswer']) => void;
   addSpectatorGuess: (guess: GuessResult) => void;
+  setSpectatorGuesses: (guesses: GuessResult[]) => void;
   clearSpectatorGuesses: () => void;
+  recordAttempt: (playerName: string, result: AttemptResult) => void;
+  clearAttempts: () => void;
   playerSubmittedSong: (playerName: string) => void;
   startRound: (data: RoundData) => void;
+  setGuessDeadline: (deadline: number | null) => void;
   addGuessResult: (result: GuessResult) => void;
   playerGuessed: (playerName: string, correct: boolean) => void;
   endRound: (data: RoundEndData) => void;
@@ -193,7 +205,9 @@ export const useGameStore = create<GameState>()(
       pendingSubmitterName: null,
       revealedAnswer: null,
       spectatorGuesses: [],
+      attemptsByPlayer: {},
       currentRound: null,
+      guessDeadline: null,
       myGuesses: [],
       roundEndData: null,
       gameEndData: null,
@@ -238,6 +252,12 @@ export const useGameStore = create<GameState>()(
           p.name === playerName ? { ...p, isReady } : p
         ),
       })),
+
+      updatePlayerConnected: (playerName, connected) => set((state) => ({
+        players: state.players.map((p) =>
+          p.name === playerName ? { ...p, connected } : p
+        ),
+      })),
       
       updateHost: (newHostName) => set((state) => ({
         currentRoom: state.currentRoom
@@ -259,7 +279,9 @@ export const useGameStore = create<GameState>()(
         gameStatus: 'idle',
         playersNeedingSongs: [],
         currentRound: null,
+        guessDeadline: null,
         myGuesses: [],
+        attemptsByPlayer: {},
         roundEndData: null,
         gameEndData: null,
         chatMessages: [],
@@ -280,7 +302,18 @@ export const useGameStore = create<GameState>()(
         spectatorGuesses: [...state.spectatorGuesses, guess],
       })),
 
+      setSpectatorGuesses: (guesses) => set({ spectatorGuesses: guesses }),
+
       clearSpectatorGuesses: () => set({ spectatorGuesses: [] }),
+
+      recordAttempt: (playerName, result) => set((state) => ({
+        attemptsByPlayer: {
+          ...state.attemptsByPlayer,
+          [playerName]: [...(state.attemptsByPlayer[playerName] || []), result].slice(0, state.settings.maxGuessesPerRound),
+        },
+      })),
+
+      clearAttempts: () => set({ attemptsByPlayer: {} }),
       
       playerSubmittedSong: (playerName) => set((state) => ({
         playersNeedingSongs: state.playersNeedingSongs.filter((n) => n !== playerName),
@@ -295,7 +328,11 @@ export const useGameStore = create<GameState>()(
         myGuesses: [],
         spectatorGuesses: [],
         roundEndData: null,
+        guessDeadline: null,
+        attemptsByPlayer: {},
       }),
+
+      setGuessDeadline: (deadline) => set({ guessDeadline: deadline }),
       
       addGuessResult: (result) => set((state) => ({
         myGuesses: [...state.myGuesses, result],
@@ -313,6 +350,8 @@ export const useGameStore = create<GameState>()(
         gameStatus: 'round_end',
         roundEndData: data,
         currentRound: null,
+        guessDeadline: null,
+        attemptsByPlayer: {},
         players: state.players.map((p) => {
           const scoreData = data.scores.find((s) => s.name === p.name);
           return scoreData ? { ...p, score: scoreData.score } : p;
@@ -323,6 +362,8 @@ export const useGameStore = create<GameState>()(
         gameStatus: 'game_end',
         gameEndData: data,
         currentRound: null,
+        guessDeadline: null,
+        attemptsByPlayer: {},
       }),
       
       addChatMessage: (message) => set((state) => ({

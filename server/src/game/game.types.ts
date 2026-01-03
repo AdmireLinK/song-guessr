@@ -53,6 +53,7 @@ export interface Player {
   score: number;
   isReady: boolean;
   isHost: boolean;
+  isSpectator?: boolean;
   guessesThisRound: number;
   correctGuessesTotal: number;
   totalGuessesTotal: number;
@@ -142,6 +143,10 @@ export interface ServerToClientEvents {
   'room:updated': (room: RoomInfo) => void;
   'room:playerJoined': (player: PlayerInfo) => void;
   'room:playerLeft': (data: { playerName: string }) => void;
+  'room:playerStatus': (data: {
+    playerName: string;
+    connected: boolean;
+  }) => void;
   'room:playerReady': (data: { playerName: string; isReady: boolean }) => void;
   'room:settingsChanged': (settings: RoomSettings) => void;
   'room:hostChanged': (data: { newHostName: string }) => void;
@@ -222,6 +227,12 @@ export interface ClientToServerEvents {
     playerName: string;
     password?: string;
   }) => void;
+  'room:joinOrCreate': (data: {
+    roomId: string;
+    playerName: string;
+    roomName?: string;
+    password?: string;
+  }) => void;
   'room:leave': () => void;
   'room:ready': (data: { isReady: boolean }) => void;
   'room:updateSettings': (settings: Partial<RoomSettings>) => void;
@@ -253,6 +264,7 @@ export interface PlayerInfo {
   score: number;
   isReady: boolean;
   isHost: boolean;
+  isSpectator?: boolean;
   connected: boolean;
   hasSubmittedSong: boolean;
 }

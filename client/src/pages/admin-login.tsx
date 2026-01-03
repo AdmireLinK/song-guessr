@@ -19,7 +19,7 @@ export function AdminLoginPage() {
     setError(null);
     
     try {
-      const serverUrl = import.meta.env.VITE_SERVER_URL || '';
+      const serverUrl = import.meta.env.VITE_SERVER_URL || import.meta.env.VITE_API_URL || '';
       const response = await fetch(`${serverUrl}/api/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
