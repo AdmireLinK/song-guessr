@@ -649,15 +649,11 @@ export class RoomService {
 
       // 计算得分
       const isFirst = round.correctGuessers.length === 1;
-      const isSelfGuess = player.name === round.submitterName;
 
-      if (isSelfGuess) {
-        player.score += SCORING.SUBMITTER_SELF_GUESS;
-      } else {
-        player.score += SCORING.CORRECT_GUESS_BASE;
-        if (isFirst) {
-          player.score += SCORING.CORRECT_GUESS_SPEED_BONUS;
-        }
+      // 出题者在服务端已被禁止猜测；这里不再保留“自猜惩罚”分支
+      player.score += SCORING.CORRECT_GUESS_BASE;
+      if (isFirst) {
+        player.score += SCORING.CORRECT_GUESS_SPEED_BONUS;
       }
     }
 
@@ -730,7 +726,7 @@ export class RoomService {
     const guessResult = {
       correct: false,
       playerName: player.name,
-      guessText: '⏰ 超时',
+      guessText: '超时',
       timestamp: Date.now(),
       guessNumber: player.guessesThisRound,
     };
@@ -831,13 +827,12 @@ export class RoomService {
       if (correctCount === 0) {
         // 没人猜对
         submitter.score += SCORING.SUBMITTER_NONE_CORRECT;
-      } else if (correctCount === totalPlayers) {
-        // 所有人都猜对
-        submitter.score += SCORING.SUBMITTER_ALL_CORRECT;
       } else {
         // 部分人猜对
         submitter.score += correctCount * SCORING.SUBMITTER_PER_CORRECT;
       }
+
+      void totalPlayers;
     }
 
     room.roundHistory.push(round);
@@ -860,7 +855,7 @@ export class RoomService {
       },
       correctGuessers: round.correctGuessers,
       scores,
-      isFinalRound: room.roundHistory.length >= room.settings.maxRounds,
+      isFinalRound: false,
     };
 
     return { scores, song: round.song! };

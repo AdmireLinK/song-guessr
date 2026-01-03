@@ -177,6 +177,15 @@ export function LobbyPage() {
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-hand">🏠 游戏大厅</h2>
           <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                socketService.connect();
+                socketService.listRooms();
+              }}
+            >
+              刷新
+            </Button>
             <Button onClick={() => setShowCreateDialog(true)}>
               <Plus className="w-4 h-4 mr-1" />
               创建房间

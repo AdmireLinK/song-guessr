@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Telemetry, TelemetryDocument } from '../schemas/telemetry.schema';
-import { GameStats, GameStatsDocument } from '../schemas/game-stats.schema';
 import { SongStats, SongStatsDocument } from '../schemas/song-stats.schema';
 import { DailyStats, DailyStatsDocument } from '../schemas/daily-stats.schema';
 import { Room, PlayerScore } from '../game/game.types';
@@ -12,8 +11,6 @@ export class StatsService {
   constructor(
     @InjectModel(Telemetry.name)
     private telemetryModel: Model<TelemetryDocument>,
-    @InjectModel(GameStats.name)
-    private gameStatsModel: Model<GameStatsDocument>,
     @InjectModel(SongStats.name)
     private songStatsModel: Model<SongStatsDocument>,
     @InjectModel(DailyStats.name)
@@ -255,24 +252,10 @@ export class StatsService {
     endDate?: Date;
     limit?: number;
     skip?: number;
-  }): Promise<{ data: GameStats[]; total: number }> {
-    const query: any = {};
-
-    if (options.startDate || options.endDate) {
-      query.startTime = {};
-      if (options.startDate) query.startTime.$gte = options.startDate;
-      if (options.endDate) query.startTime.$lte = options.endDate;
-    }
-
-    const total = await this.gameStatsModel.countDocuments(query);
-    const data = await this.gameStatsModel
-      .find(query)
-      .sort({ startTime: -1 })
-      .skip(options.skip || 0)
-      .limit(options.limit || 50)
-      .exec();
-
-    return { data, total };
+  }): Promise<{ data: any[]; total: number }> {
+    // 按需求：不再写入/保存 GameStats 明细，因此这里直接返回空
+    void options;
+    return { data: [], total: 0 };
   }
 
   // 获取排行榜
@@ -288,7 +271,7 @@ export class StatsService {
     totalPlayers: number;
     activeToday: number;
     errorCount24h: number;
-    recentGames: GameStats[];
+    recentGames: any[];
     topPlayers: any[];
   }> {
     const today = new Date();
@@ -296,20 +279,20 @@ export class StatsService {
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
-    const [totalGames, todayDoc, errorCount24h, recentGames] =
-      await Promise.all([
-        this.gameStatsModel.countDocuments({ completed: true }),
-        this.dailyStatsModel.findOne({ date: this.todayKey(today) }).exec(),
-        this.telemetryModel.countDocuments({
-          type: 'error',
-          timestamp: { $gte: yesterday },
-        }),
-        this.gameStatsModel
-          .find({ completed: true })
-          .sort({ startTime: -1 })
-          .limit(5)
-          .exec(),
-      ]);
+    const [todayDoc, errorCount24h, totalGamesAgg] = await Promise.all([
+      this.dailyStatsModel.findOne({ date: this.todayKey(today) }).exec(),
+      this.telemetryModel.countDocuments({
+        type: 'error',
+        timestamp: { $gte: yesterday },
+      }),
+      this.dailyStatsModel
+        .aggregate([
+          { $group: { _id: null, totalGames: { $sum: '$games' } } },
+        ])
+        .exec(),
+    ]);
+
+    const totalGames = totalGamesAgg?.[0]?.totalGames || 0;
 
     const activeToday = todayDoc?.players || 0;
     // 没有 playerstats 时，“总玩家数”仅提供一个粗口径：取最近 30 天内每日玩家数的最大值
@@ -328,7 +311,7 @@ export class StatsService {
       totalPlayers,
       activeToday,
       errorCount24h,
-      recentGames,
+      recentGames: [],
       topPlayers: [],
     };
   }
@@ -371,6 +354,7 @@ export class StatsService {
     rangeDays: number;
     guessCount: number;
     errorCount: number;
+    activeIpCount: number;
     series: Array<{
       date: string;
       guesses: number;
@@ -396,8 +380,12 @@ export class StatsService {
       activeIps: d.players || 0,
     }));
 
+    // 兼容旧管理面板字段（旧版含 activeIpCount）：当前不保存独立的 IP 统计，使用“区间内最大活跃玩家数”做近似。
+    const activeIpCount = series.reduce((m, s) => Math.max(m, s.activeIps || 0), 0);
+
     return {
       rangeDays,
+      activeIpCount,
       guessCount,
       errorCount,
       series,

@@ -1,7 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'path';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -22,11 +21,6 @@ async function bootstrap() {
     }),
   );
 
-  // 托管静态文件（管理面板）
-  app.useStaticAssets(join(__dirname, '..', 'public'), {
-    prefix: '/admin/',
-  });
-
   // 设置全局前缀（可选，用于反向代理）
   const globalPrefix = process.env.API_PREFIX || '';
   if (globalPrefix) {
@@ -37,8 +31,6 @@ async function bootstrap() {
   await app.listen(port);
 
   console.log(`🎵 Song Guessr Server running on port ${port}`);
-  console.log(`📊 Admin panel: http://localhost:${port}/admin/`);
-  console.log(`🎮 Game WebSocket: ws://localhost:${port}/game`);
 }
 
 bootstrap();

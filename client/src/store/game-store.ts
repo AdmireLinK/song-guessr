@@ -28,7 +28,6 @@ export interface RoomSettings {
   endOnFirstCorrect: boolean;
   maxGuessesPerRound: number;
   roundDuration: number;
-  maxRounds: number;
 }
 
 export interface LyricLine {
@@ -185,7 +184,6 @@ const DEFAULT_SETTINGS: RoomSettings = {
   endOnFirstCorrect: false,
   maxGuessesPerRound: 3,
   roundDuration: 60,
-  maxRounds: 10,
 };
 
 export const useGameStore = create<GameState>()(

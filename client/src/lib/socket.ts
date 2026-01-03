@@ -152,6 +152,7 @@ class SocketService {
 
     this.socket.on('room:hostChanged', ({ newHostName }) => {
       store.updateHost(newHostName);
+      store.setError(`房主已转移给 ${newHostName}`);
     });
 
     this.socket.on('room:kicked', ({ reason }) => {
@@ -205,7 +206,7 @@ class SocketService {
       // 同步尝试结果到玩家列表
       store.clearAttempts();
       for (const g of list) {
-        const isTimeout = typeof g?.guessText === 'string' && g.guessText.includes('⏰');
+        const isTimeout = typeof g?.guessText === 'string' && (g.guessText.includes('⏰') || g.guessText.includes('超时'));
         store.recordAttempt(g.playerName, g.correct ? 'correct' : (isTimeout ? 'timeout' : 'wrong'));
       }
     });
@@ -245,7 +246,7 @@ class SocketService {
       store.addGuessResult(result);
 
       // 记录自己的尝试类型（❌/⏰/✅）
-      const isTimeout = typeof result?.guessText === 'string' && result.guessText.includes('⏰');
+      const isTimeout = typeof result?.guessText === 'string' && (result.guessText.includes('⏰') || result.guessText.includes('超时'));
       store.recordAttempt(result.playerName, result.correct ? 'correct' : (isTimeout ? 'timeout' : 'wrong'));
 
       const st = useGameStore.getState();

@@ -1,9 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 
+// 说明：该 schema 当前未在 AdminModule 中注册（不再写入 GameStats 明细）。
+// 保留文件仅为兼容旧代码参考；避免使用 collection: 'tests' 这类临时集合名。
 export type GameStatsDocument = GameStats & Document;
 
-@Schema({ timestamps: true, collection: 'tests' })
+@Schema({ timestamps: true })
 export class GameStats {
   @Prop({ required: true })
   roomId: string;

@@ -17,41 +17,10 @@ const NETEASE_DETAIL_API =
 const NETEASE_EAPI_KEY = Buffer.from('e82ckenh8dichen8', 'utf8');
 
 // QQ音乐API相关配置
-const QQ_MUSIC_BASE_URL = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
 const QQ_MUSIC_SONG_DETAIL_URL =
   'https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg';
 const QQ_MUSIC_LRC_URL =
   'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg';
-
-function generateQQMusicSign(data: any): string {
-  const PART_1_INDEXES = [23, 14, 6, 36, 16, 40, 7, 19].filter((x) => x < 40);
-  const PART_2_INDEXES = [16, 1, 32, 12, 19, 27, 8, 5];
-  const SCRAMBLE_VALUES = [
-    89, 39, 179, 150, 218, 82, 58, 252, 177, 52, 186, 123, 120, 64, 242, 133,
-    143, 161, 121, 179,
-  ];
-
-  try {
-    const str = JSON.stringify(data);
-    const hash = createHash('sha1').update(str).digest('hex').toUpperCase();
-
-    const part1 = PART_1_INDEXES.map((i) => hash[i]).join('');
-    const part2 = PART_2_INDEXES.map((i) => hash[i]).join('');
-
-    const part3 = Buffer.alloc(20);
-    for (let i = 0; i < SCRAMBLE_VALUES.length; i++) {
-      const value = SCRAMBLE_VALUES[i] ^ parseInt(hash.substr(i * 2, 2), 16);
-      part3[i] = value;
-    }
-
-    const b64Part = part3.toString('base64').replace(/[\\/+=]/g, '');
-    return `zzc${part1}${b64Part}${part2}`.toLowerCase();
-  } catch (error) {
-    console.error('Error generating QQ Music sign:', error);
-    const str = typeof data === 'object' ? JSON.stringify(data) : String(data);
-    return createHash('md5').update(str).digest('hex');
-  }
-}
 
 export type ServerType = 'netease' | 'qq';
 
@@ -136,7 +105,6 @@ function pkcs7Unpad(data: Buffer): Buffer {
 }
 
 function aesEncryptECB(text: string, key: Buffer): string {
-  const { createCipheriv } = require('crypto');
   const genKey = generateKey(key);
   const cipher = createCipheriv('aes-128-ecb', genKey, Buffer.alloc(0));
   cipher.setAutoPadding(false);
@@ -155,7 +123,6 @@ function aesEncryptECB(text: string, key: Buffer): string {
 }
 
 function aesDecryptECB(encryptedHex: string, key: Buffer): string {
-  const { createDecipheriv } = require('crypto');
   const genKey = generateKey(key);
   const decipher = createDecipheriv('aes-128-ecb', genKey, Buffer.alloc(0));
   decipher.setAutoPadding(false);
@@ -265,6 +232,8 @@ async function fetchQQMusicAPI(
     headers: {
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      Accept: 'application/json, text/plain, */*',
+      Referer: 'https://y.qq.com/',
     },
   });
 
@@ -272,20 +241,33 @@ async function fetchQQMusicAPI(
     throw new Error(`QQ Music API error: HTTP ${response.status}`);
   }
 
-  const text = await response.text();
+  const text = (await response.text()).trim();
 
-  // 处理QQ音乐API返回的JSONP格式
-  if (text.startsWith('callback(')) {
-    const jsonStr = text.replace(/^callback\((.*)\)$/, '$1');
-    return JSON.parse(jsonStr);
+  // QQ 音乐接口可能返回：
+  // 1) 纯 JSON
+  // 2) JSONP：callback(...), jsonCallback(...), MusicJsonCallback(...);
+  // 3) 带换行/分号的回调包装
+  try {
+    return JSON.parse(text);
+  } catch {
+    const first = text.indexOf('(');
+    const last = text.lastIndexOf(')');
+    if (first !== -1 && last !== -1 && last > first) {
+      const inner = text.slice(first + 1, last);
+      try {
+        return JSON.parse(inner);
+      } catch {
+        // 兜底：从第一个 { 到最后一个 } 提取 JSON（兼容 try{callback({...})}catch(e){} 等包装）
+        const b = text.indexOf('{');
+        const e = text.lastIndexOf('}');
+        if (b !== -1 && e !== -1 && e > b) {
+          return JSON.parse(text.slice(b, e + 1));
+        }
+        throw new Error('QQ Music API returned non-JSON response');
+      }
+    }
+    throw new Error('QQ Music API returned non-JSON response');
   }
-  // 处理QQ音乐API返回的带版权声明的JSON
-  if (text.includes('jsonCallback(')) {
-    const jsonStr = text.replace(/^.*jsonCallback\((.*)\).*$/, '$1');
-    return JSON.parse(jsonStr);
-  }
-  // 直接返回JSON
-  return JSON.parse(text);
 }
 
 async function getQQMusicSongDetail(songId: string): Promise<SongInfo[]> {
@@ -303,30 +285,33 @@ async function getQQMusicSongDetail(songId: string): Promise<SongInfo[]> {
 
     const result = await fetchQQMusicAPI(QQ_MUSIC_SONG_DETAIL_URL, params);
 
-    // 检查返回的数据结构
-    if (!result || !result.data || !result.data.length) {
-      console.log('QQ Music API returned empty data');
-      return [];
-    }
+    // 检查返回的数据结构（兼容不同字段）
+    const dataArr = Array.isArray(result?.data)
+      ? result.data
+      : Array.isArray(result?.data?.songinfo)
+        ? result.data.songinfo
+        : Array.isArray(result?.songlist)
+          ? result.songlist
+          : [];
 
-    const songData = result.data[0];
+    if (!dataArr.length) return [];
 
-    // QQ音乐API返回的字段名是 mid
-    if (!songData.mid) {
-      console.log('QQ Music API returned invalid song data');
-      return [];
-    }
+    const songData = dataArr[0];
+
+    // QQ音乐API字段可能是 mid 或 songmid
+    const mid = songData.mid || songData.songmid;
+    if (!mid) return [];
 
     return [
       {
-        id: songData.mid,
+        id: mid,
         numeric_id: songData.id,
         name: songData.name,
         artist: songData.singer
           ? songData.singer.map((s: any) => s.name).join(',')
           : '',
         album: songData.album?.name || '',
-        pic_id: songData.album?.mid || '',
+        pic_id: songData.album?.mid || songData.album?.id || '',
       },
     ];
   } catch (error) {
@@ -387,11 +372,16 @@ async function getQQMusicDetailInfo(songId: string): Promise<SongDetailInfo> {
 
     const result = await fetchQQMusicAPI(QQ_MUSIC_SONG_DETAIL_URL, params);
 
-    if (!result || !result.data || !result.data.length) {
-      return {};
-    }
+    const dataArr = Array.isArray(result?.data)
+      ? result.data
+      : Array.isArray(result?.data?.songinfo)
+        ? result.data.songinfo
+        : Array.isArray(result?.songlist)
+          ? result.songlist
+          : [];
+    if (!dataArr.length) return {};
 
-    const songData = result.data[0];
+    const songData = dataArr[0];
     const detailInfo: SongDetailInfo = {};
 
     // 处理发行时间
@@ -454,7 +444,6 @@ async function getQQMusicLikes(
     }
 
     if (!songNumericId) {
-      console.log('No numeric ID available for QQ Music likes API');
       return { count: 0 };
     }
 
@@ -493,10 +482,6 @@ async function getQQMusicLikes(
     }
 
     const result = await response.json();
-    console.log(
-      'QQ Music Likes API response:',
-      JSON.stringify(result, null, 2),
-    );
 
     const apiResult =
       result['music.musicasset.SongFavRead.GetSongFansNumberById'];
@@ -577,13 +562,8 @@ export async function getSongDetailByNameArtist(
   artist: string,
 ): Promise<(MusicDetail & MusicResources) | null> {
   try {
-    console.log(
-      `[Music] getSongDetailByNameArtist: searching for "${name}" - ${artist}`,
-    );
-
     // Search for the song by name
     const searchResults = await searchSongs(name, server);
-    console.log(`[Music] Search results: ${searchResults.length} found`);
 
     if (searchResults.length === 0) {
       console.warn(`[Music] No search results for "${name}" by "${artist}"`);
@@ -598,9 +578,6 @@ export async function getSongDetailByNameArtist(
     );
 
     const selectedResult = exactMatch || searchResults[0];
-    console.log(
-      `[Music] Selected: "${selectedResult.name}" - "${selectedResult.artist}", ID: "${selectedResult.id}"`,
-    );
 
     // Use the found song ID to get full details
     try {
@@ -608,7 +585,6 @@ export async function getSongDetailByNameArtist(
         server,
         selectedResult.id,
       );
-      console.log(`[Music] Got details for song ID: ${selectedResult.id}`);
       return detail;
     } catch (error) {
       console.error(
@@ -1027,17 +1003,13 @@ export async function getMusicDetailWithLikesPriority(
 ): Promise<MusicDetailWithFullInfo> {
   // 首先尝试QQ音乐
   try {
-    console.log(`尝试使用QQ音乐API获取歌曲 ${songId} 详情...`);
     const result = await getMusicDetailWithLikes('qq', songId);
-    console.log(`成功使用QQ音乐API获取歌曲 ${songId} 详情`);
     return result;
   } catch (qqError) {
     console.error(`QQ音乐API获取失败，回退到网易云API: ${qqError.message}`);
     // QQ音乐失败，回退到网易云
     try {
-      console.log(`尝试使用网易云API获取歌曲 ${songId} 详情...`);
       const result = await getMusicDetailWithLikes('netease', songId);
-      console.log(`成功使用网易云API获取歌曲 ${songId} 详情`);
       return result;
     } catch (neteaseError) {
       console.error(`网易云API获取也失败: ${neteaseError.message}`);
@@ -1083,7 +1055,6 @@ export async function searchSongs(
   try {
     if (server === 'qq') {
       // QQ Music search not implemented via this endpoint
-      console.warn('QQ Music search not supported via searchSongs');
       return [];
     }
 
@@ -1098,13 +1069,6 @@ export async function searchSongs(
     }
 
     const data = await response.json();
-    // Log raw response to see all fields
-    if (data && data.length > 0) {
-      console.log(
-        '[Search] Raw API response (first item):',
-        JSON.stringify(data[0], null, 2),
-      );
-    }
 
     // Meting API search returns complete song objects with url, pic, lrc URLs
     // Extract the real song ID from the URL parameter
@@ -1125,10 +1089,6 @@ export async function searchSongs(
           item.songmid ||
           `${item.title || item.name}__${item.author}`;
       }
-
-      console.log(
-        `[Search] Item ${index}: id="${id}", name="${item.title || item.name}", artist="${item.author}"`,
-      );
 
       return {
         id: String(id),

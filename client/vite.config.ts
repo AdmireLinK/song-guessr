@@ -27,9 +27,6 @@ export default defineConfig(({ mode }) => {
             proxy.on('error', (err, _req, _res) => {
               console.log('[Proxy Error] /api:', err.message)
             })
-            proxy.on('proxyReq', (_proxyReq, req, _res) => {
-              console.log('[Proxy] ->', req.method, req.url)
-            })
           },
         },
         // WebSocket 代理 (socket.io)
@@ -44,12 +41,6 @@ export default defineConfig(({ mode }) => {
           target: backendUrl,
           changeOrigin: true,
           ws: true,
-          secure: false,
-        },
-        // Admin 静态资源代理
-        '/admin': {
-          target: backendUrl,
-          changeOrigin: true,
           secure: false,
         },
       },

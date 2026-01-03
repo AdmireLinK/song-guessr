@@ -14,8 +14,8 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/lobby" element={<Navigate to="/" replace />} />
         <Route path="/room/:roomId" element={<RoomPage />} />
         <Route path="/home" element={<HomePage />} />
-        <Route path="/admin" element={<AdminPage />} />
         <Route path="/admin/login" element={<AdminLoginPage />} />
+        <Route path="/admin/*" element={<AdminPage />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,

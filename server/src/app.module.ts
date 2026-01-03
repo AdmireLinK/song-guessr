@@ -20,11 +20,7 @@ import { MusicService } from './game/music.service';
       process.env.MONGODB_URI || 'mongodb://localhost:27017/song-guessr',
     ),
     ScheduleModule.forRoot(),
-    // 静态文件服务（用于管理面板和前端）
-    ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', 'public'),
-      serveRoot: '/admin',
-    }),
+    // 静态文件服务（仅托管前端构建产物；管理面板改为前端 /admin 路由 + 调用 /api/admin）
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', '..', 'client', 'dist'),
       // path-to-regexp v8 不支持 "/api/*"（缺少参数名），这里用“带名字的通配符”写法。
@@ -34,8 +30,6 @@ import { MusicService } from './game/music.service';
         '/api/*path',
         '/game',
         '/game/*path',
-        '/admin',
-        '/admin/*path',
       ],
     }),
     GameModule,

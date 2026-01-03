@@ -111,7 +111,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server.to(playerId).emit('game:guessResult', {
       correct: false,
       playerName: player.name,
-      guessText: '⏰ 超时',
+      guessText: '超时',
       timestamp: Date.now(),
       guessNumber: player.guessesThisRound,
       remainingGuesses: result.remainingGuesses,
@@ -282,7 +282,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
               ...s,
               delta: 0,
             })),
-            isFinalRound: room.roundHistory.length >= room.settings.maxRounds,
+            isFinalRound: false,
           };
         })();
       client.emit('game:roundEnd', payload);
@@ -806,9 +806,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // If name and artist are provided, look up by name/artist
       if (data.name && data.artist) {
-        console.log(
-          `[Game] Fetching song detail by name/artist: ${data.name} - ${data.artist}`,
-        );
         songDetail = await this.musicService.getSongDetailByNameArtist(
           data.name,
           data.artist,
@@ -816,9 +813,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         );
 
         if (!songDetail) {
-          console.log(
-            `[Game] getSongDetailByNameArtist returned null for "${data.name}" - "${data.artist}"`,
-          );
           client.emit('error', {
             code: 'SONG_NOT_FOUND',
             message: `找不到歌曲: ${data.name} - ${data.artist}`,
@@ -828,14 +822,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
         // Update songId with the found ID
         songId = songDetail.id;
-        console.log(`[Game] Got song detail:`, {
-          id: songId,
-          title: songDetail.title,
-          artist: songDetail.author,
-        });
       } else if (songId) {
         // If songId is provided, fetch using that
-        console.log(`[Game] Fetching song detail by ID: ${songId}`);
         songDetail = await this.musicService.getSongDetail(songId, data.server);
 
         if (!songDetail) {
@@ -879,10 +867,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         album: undefined,
         tags: detailInfo?.tags,
       };
-
-      console.log(
-        `[Game] Created song with ${(song.lyrics || []).length} lyric lines`,
-      );
 
       const result = this.roomService.submitSong(client.id, song);
       if (!result.success) {
@@ -1185,9 +1169,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const room = this.roomService.getRoom(roomId);
     if (!room) return;
 
-    // 达到最大轮数后不再自动结束/自动下一轮，等待房主在结算页操作
-    if (room.roundHistory.length >= room.settings.maxRounds) return;
-
     room.status = 'waiting_submitter';
     room.pendingSubmitterName = undefined;
     this.server.to(roomId).emit('game:needSubmitter', {
@@ -1204,8 +1185,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const { scores, song } = this.roomService.endRound(room);
 
-    const isFinalRound = room.roundHistory.length >= room.settings.maxRounds;
-
     this.server.to(roomId).emit('game:roundEnd', {
       song: {
         title: song.title,
@@ -1216,7 +1195,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       correctGuessers:
         room.roundHistory[room.roundHistory.length - 1].correctGuessers,
       scores,
-      isFinalRound,
+      isFinalRound: false,
     });
   }
 
@@ -1292,10 +1271,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
     if (room.status !== 'round_end') {
       client.emit('error', { code: 'INVALID_STATE', message: '当前不在结算阶段' });
-      return;
-    }
-    if (room.roundHistory.length >= room.settings.maxRounds) {
-      client.emit('error', { code: 'FINAL_ROUND', message: '已到最后一轮，请结束游戏' });
       return;
     }
 

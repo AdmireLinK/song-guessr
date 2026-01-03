@@ -252,11 +252,9 @@ export function RoomPage() {
         `${serverUrl}/api/music/search?keyword=${encodeURIComponent(searchQuery)}&server=netease`
       );
       const data = await response.json();
-      console.log('[Search] API response:', data);
       // Backend provides search results with id, name, artist
       setSearchResults(data || []);
       lastSearchRef.current = searchQuery.trim();
-      console.log('[Search] Results count:', (data || []).length);
     } catch (error) {
       console.error('[Search] Error:', error);
     } finally {
@@ -264,7 +262,8 @@ export function RoomPage() {
     }
   };
 
-  const triggerSearchOnBlur = () => {
+  // 输入保持焦点：停止输入一小会自动搜索
+  useEffect(() => {
     const q = searchQuery.trim();
     if (!q) {
       setSearchResults([]);
@@ -272,8 +271,12 @@ export function RoomPage() {
       return;
     }
     if (q === lastSearchRef.current) return;
-    void handleSearchSongs();
-  };
+
+    const t = window.setTimeout(() => {
+      void handleSearchSongs();
+    }, 450);
+    return () => window.clearTimeout(t);
+  }, [searchQuery]);
 
   const handleSelectSong = (song: SearchSong, mode: 'submit' | 'guess') => {
     if (!song?.name || !song?.artist) {
@@ -316,9 +319,14 @@ export function RoomPage() {
               placeholder="搜索歌曲名或歌手..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              onBlur={triggerSearchOnBlur}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+                if (e.key === 'Enter') {
+                  // Enter：立即搜索，但不改变焦点
+                  const q = searchQuery.trim();
+                  if (!q) return;
+                  if (q === lastSearchRef.current) return;
+                  void handleSearchSongs();
+                }
               }}
             />
             {isSearching && (
@@ -390,6 +398,7 @@ export function RoomPage() {
   const amSubmitter = (currentRound?.submitterName || pendingSubmitterName) === playerName;
   const iGuessedCorrectly = myGuesses.some((g) => g.correct);
   const amSpectator = !!me?.isSpectator || amSubmitter || iGuessedCorrectly;
+  const canSeeOthersGuesses = !!me?.isSpectator || amSubmitter;
 
   useEffect(() => {
     if (currentRoom?.name) setRoomNameDraft(currentRoom.name);
@@ -443,6 +452,18 @@ export function RoomPage() {
         )}
       </div>
     );
+  };
+
+  const normalizeGuessText = (text: string) =>
+    String(text || '')
+      .replace(/^(✅|❌|⏰|√)+\s*/g, '')
+      .trim();
+
+  const getGuessIcon = (guess: GuessLike) => {
+    if ((guess as any)?.correct) return '✅';
+    const t = normalizeGuessText((guess as any)?.guessText);
+    if (t.includes('超时')) return '⏰';
+    return '❌';
   };
 
   if (!currentRoom) {
@@ -786,7 +807,7 @@ export function RoomPage() {
                 </Card>
 
                 {/* 猜测历史：独立 Card，放到歌词 Card 的下方 */}
-                {(myGuesses.length > 0 || (amSpectator && spectatorGuesses.length > 0)) && (
+                {(myGuesses.length > 0 || (canSeeOthersGuesses && spectatorGuesses.length > 0)) && (
                   <Card>
                     <CardHeader>
                       <CardTitle className="text-lg">🧾 猜测历史</CardTitle>
@@ -807,7 +828,7 @@ export function RoomPage() {
                                     : 'bg-muted/40 text-foreground border-muted'
                                 }`}
                               >
-                                <div className="font-semibold">{guess.correct ? '✅' : '❌'} {guess.guessText}</div>
+                                <div className="font-semibold">{getGuessIcon(guess)} {normalizeGuessText(guess.guessText)}</div>
                                 {formatGuessFeedback(guess)}
                               </div>
                             ))}
@@ -820,7 +841,7 @@ export function RoomPage() {
                         )}
                       </div>
 
-                      {amSpectator && (
+                      {canSeeOthersGuesses && (
                         <div>
                           <div className="text-sm text-muted-foreground mb-2">其他玩家</div>
                           {spectatorGuesses.length === 0 ? (
@@ -836,7 +857,7 @@ export function RoomPage() {
                                       : 'bg-muted/40 text-foreground border-muted'
                                   }`}
                                 >
-                                  <div className="font-semibold">{guess.correct ? '✅' : '❌'} {guess.playerName}: {guess.guessText}</div>
+                                  <div className="font-semibold">{getGuessIcon(guess)} {guess.playerName}: {normalizeGuessText(guess.guessText)}</div>
                                   {formatGuessFeedback(guess)}
                                 </div>
                               ))}
@@ -906,15 +927,14 @@ export function RoomPage() {
 
                       {isHost && (
                         <div className="mt-4 flex justify-end">
-                          {roundEndData.isFinalRound ? (
-                            <Button onClick={() => socketService.finishGame()}>
+                          <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => socketService.finishGame()}>
                               结束游戏
                             </Button>
-                          ) : (
                             <Button onClick={() => socketService.nextRound()}>
                               下一轮
                             </Button>
-                          )}
+                          </div>
                         </div>
                       )}
                     </div>

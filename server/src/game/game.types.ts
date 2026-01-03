@@ -5,7 +5,6 @@ export interface RoomSettings {
   endOnFirstCorrect: boolean; // 第一人猜对后结束 vs 等所有人猜完
   maxGuessesPerRound: number; // 每轮每人最大猜测次数
   roundDuration: number; // 每轮时间限制（秒）
-  maxRounds: number; // 最大轮数
 }
 
 export interface LyricLine {
@@ -303,12 +302,10 @@ export interface PlayerScore {
 
 // 计分规则
 export const SCORING = {
-  CORRECT_GUESS_BASE: 100, // 猜对基础分
-  CORRECT_GUESS_SPEED_BONUS: 50, // 第一个猜对额外加分
-  SUBMITTER_PER_CORRECT: 20, // 出题者：每有一人猜对加分
-  SUBMITTER_ALL_CORRECT: -30, // 出题者：所有人都猜对扣分
-  SUBMITTER_NONE_CORRECT: 50, // 出题者：没人猜对加分
-  SUBMITTER_SELF_GUESS: -50, // 出题者自己猜自己的歌扣分
+  CORRECT_GUESS_BASE: 10, // 猜对基础分
+  CORRECT_GUESS_SPEED_BONUS: 5, // 第一个猜对额外加分
+  SUBMITTER_PER_CORRECT: 3, // 出题者：每有一人猜对加分
+  SUBMITTER_NONE_CORRECT: 5, // 出题者：没人猜对加分
 } as const;
 
 // 默认房间设置
@@ -317,5 +314,4 @@ export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
   endOnFirstCorrect: false,
   maxGuessesPerRound: 3,
   roundDuration: 60,
-  maxRounds: 10,
 };

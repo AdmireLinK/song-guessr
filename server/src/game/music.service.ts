@@ -48,7 +48,6 @@ export class MusicService {
     try {
       const detail = await getSongDetailByNameArtist(server, name, artist);
       if (!detail) {
-        console.log(`[MusicService] No detail found for ${name} - ${artist}`);
         return null;
       }
 
