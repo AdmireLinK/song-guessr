@@ -549,16 +549,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('room:leave')
   handleLeaveRoom(@ConnectedSocket() client: Socket) {
+    const playerName = this.getPlayerName(client);
     const { room, wasHost, dissolved } = this.roomService.leaveRoom(client.id);
 
     if (dissolved) {
-      client.emit('room:left', { playerName: this.getPlayerName(client) });
+      client.emit('room:left', { playerName });
     } else if (room) {
       client.leave(room.id);
-      client.emit('room:left', { playerName: this.getPlayerName(client) });
-      this.server
-        .to(room.id)
-        .emit('room:playerLeft', { playerName: this.getPlayerName(client) });
+      client.emit('room:left', { playerName });
+
+      // 清理该玩家的计时器
+      this.clearGuessTimer(room.id, client.id);
+
+      this.server.to(room.id).emit('room:playerLeft', { playerName });
 
       if (wasHost) {
         this.server
@@ -569,6 +572,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.server
         .to(room.id)
         .emit('room:updated', this.roomService.toRoomInfo(room));
+
+      // 若游戏进行中，退出可能影响回合
+      if (room.status === 'playing' && room.currentRound?.isActive) {
+        const wasSubmitter = room.currentRound.submitterName === playerName;
+        if (wasSubmitter || this.countConnectedGuessers(room.id) <= 0) {
+          this.endCurrentRound(room.id);
+        }
+      }
     }
 
     this.server.emit('room:list', this.roomService.getPublicRooms());
